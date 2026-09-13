@@ -1,0 +1,173 @@
+.frame {
+  --site-header-height: 80px;
+}
+
+.overlay {
+  top: var(--site-header-height);
+  visibility: hidden;
+}
+
+/* Both Link pending and the route fallback feed one indicator. Keeping its
+   delay in CSS also covers the streamed shell before React hydrates. */
+.frame:has([data-site-loading]) .overlay {
+  animation: reveal 0s 200ms forwards;
+}
+
+/* Hidden content cannot receive keyboard focus underneath the overlay. */
+.frame:has([data-site-loading]) .content {
+  animation: conceal 0s 200ms forwards;
+}
+
+/* Navigation stays available even if scrolling had faded the header out. */
+.frame:has([data-site-loading]) > header {
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+
+@keyframes reveal {
+  to {
+    visibility: visible;
+  }
+}
+
+@keyframes conceal {
+  to {
+    visibility: hidden;
+  }
+}
+
+.book,
+.sleepy {
+  display: none;
+}
+
+.art[data-variant="book"] .book {
+  display: block;
+}
+
+.art[data-variant="sleepy"] .sleepy {
+  display: grid;
+}
+
+.book {
+  perspective: 180px;
+}
+
+.book::before,
+.book::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 27px;
+  height: 38px;
+  border: 1px solid var(--muted);
+  opacity: 0.55;
+}
+
+.book::before {
+  left: 0;
+  border-radius: 5px 0 0 5px;
+  transform: skewY(-4deg);
+}
+
+.book::after {
+  right: 0;
+  border-radius: 0 5px 5px 0;
+  transform: skewY(4deg);
+}
+
+.spine {
+  position: absolute;
+  left: 26px;
+  top: 1px;
+  height: 38px;
+  width: 1px;
+  background: var(--muted);
+  opacity: 0.3;
+}
+
+.pageLines,
+.leaf::after {
+  position: absolute;
+  left: 7px;
+  top: 12px;
+  width: 13px;
+  height: 1px;
+  background: var(--border);
+  box-shadow: 0 6px 0 var(--border), 0 12px 0 var(--border);
+}
+
+.leaf {
+  position: absolute;
+  z-index: 2;
+  left: 27px;
+  top: 0;
+  width: 27px;
+  height: 38px;
+  transform-origin: left center;
+  border: 1px solid var(--muted);
+  border-radius: 0 5px 5px 0;
+  background: var(--background);
+  opacity: 0;
+}
+
+.leaf::after {
+  content: "";
+  left: 6px;
+}
+
+.frame:has([data-site-loading]) .leaf {
+  animation: turnPage 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.sleepSigns span {
+  display: inline-block;
+  line-height: 1;
+  opacity: 0.25;
+}
+
+.frame:has([data-site-loading]) .sleepSigns span {
+  animation: sleepDrift 2.8s ease-in-out infinite;
+}
+
+.frame:has([data-site-loading]) .sleepSigns span:nth-child(2) {
+  animation-delay: 0.28s;
+}
+
+.frame:has([data-site-loading]) .sleepSigns span:nth-child(3) {
+  animation-delay: 0.56s;
+}
+
+@keyframes turnPage {
+  0%, 14% { transform: rotateY(0); opacity: 0; }
+  22% { opacity: 0.8; }
+  69%, 83% { transform: rotateY(-180deg); opacity: 0.55; }
+  94%, 100% { transform: rotateY(-180deg); opacity: 0; }
+}
+
+@keyframes sleepDrift {
+  0%, 75%, 100% { opacity: 0.25; transform: translateY(2px); }
+  36% { opacity: 0.85; transform: translateY(-4px); }
+}
+
+@media (min-width: 821px) {
+  .frame {
+    --site-header-height: 92px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame:has([data-site-loading]) .leaf,
+  .frame:has([data-site-loading]) .sleepSigns span {
+    animation: none;
+  }
+
+  .leaf {
+    display: none;
+  }
+
+  .sleepSigns span {
+    opacity: 0.7;
+    transform: none;
+  }
+}

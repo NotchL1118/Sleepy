@@ -44,7 +44,7 @@ export type PostPageData = {
 export type PostRoute = Pick<Post, "kind" | "slug">;
 
 export type PostHeading = {
-  depth: 2 | 3;
+  depth: 1 | 2 | 3 | 4;
   id: string;
   title: string;
 };

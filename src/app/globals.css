@@ -3,6 +3,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  --content-reading-width: 45rem;
   --background: #fefefb;
   --foreground: #1a1a1a;
   --surface: #f7f6f2;
@@ -35,7 +36,7 @@
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-accent: var(--accent);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
 }
 

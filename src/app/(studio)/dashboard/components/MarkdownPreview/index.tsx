@@ -1,6 +1,7 @@
 "use client";
 
-import Markdown from "react-markdown";
+import { MarkdownHooks } from "react-markdown";
+import { markdownRehypePlugins } from "@/components/markdown/markdown-plugins";
 import { markdownComponents } from "@/components/markdown/markdown-elements";
 import {
   markdownRemarkPlugins,
@@ -11,7 +12,6 @@ import { markdownProseClassName } from "@/components/markdown/markdown-prose";
 import type { PostKind } from "@/lib/posts/types";
 
 export function MarkdownPreview({
-  kind,
   markdown,
 }: {
   kind: PostKind;
@@ -22,16 +22,20 @@ export function MarkdownPreview({
   }
 
   return (
-    <div className={markdownProseClassName(kind)}>
-      <Markdown
-        skipHtml
-        remarkPlugins={markdownRemarkPlugins}
-        remarkRehypeOptions={markdownRemarkRehypeOptions}
-        urlTransform={markdownUrlTransform}
-        components={markdownComponents}
-      >
-        {markdown}
-      </Markdown>
+    <div className="@container/markdown-reading min-w-0">
+      <div className={markdownProseClassName}>
+        <MarkdownHooks
+          skipHtml
+          fallback={<p className="text-sm text-muted" role="status">正在准备预览…</p>}
+          rehypePlugins={markdownRehypePlugins}
+          remarkPlugins={markdownRemarkPlugins}
+          remarkRehypeOptions={markdownRemarkRehypeOptions}
+          urlTransform={markdownUrlTransform}
+          components={markdownComponents}
+        >
+          {markdown}
+        </MarkdownHooks>
+      </div>
     </div>
   );
 }

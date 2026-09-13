@@ -160,7 +160,7 @@ export function MarkdownEditorField({
               view === "split" ? "pl-6" : ""
             }`}
           >
-            <div className="mx-auto w-full max-w-3xl">
+            <div className="mx-auto w-full max-w-(--content-reading-width)">
               <MarkdownPreview kind={kind} markdown={previewMarkdown} />
             </div>
           </div>

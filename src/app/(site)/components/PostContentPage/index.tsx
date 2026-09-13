@@ -1,11 +1,10 @@
-import Link from "next/link";
+import { SiteLink as Link } from "../SiteLink";
 import { MarkdownContent } from "./MarkdownContent";
 import { TableOfContents } from "./TableOfContents";
 import {
   estimateReadingMinutes,
   extractPostHeadings,
   postGroupLabel,
-  postKindLabel,
   postPath,
 } from "@/lib/posts/content";
 import type { AdjacentPost, PostPageData } from "@/lib/posts/types";
@@ -38,9 +37,6 @@ export async function PostContentPage({ page }: { page: PostPageData }) {
     <main className="pb-36 pt-8 sm:pt-10 min-[821px]:pt-12">
       <article>
         <header className={`${styles.articleHeader} ${readingClass}`}>
-          <p className="text-xs font-semibold tracking-[0.12em] text-accent uppercase">
-            {postKindLabel(post.kind)} · {post.group.name}
-          </p>
           <h1 className={styles.articleTitle}>{post.title}</h1>
           <div className={styles.metadata}>
             <span>
