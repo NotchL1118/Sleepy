@@ -1,7 +1,6 @@
 import { MarkdownAsync } from "react-markdown";
 import { cacheLife } from "next/cache";
-import rehypePrettyCode from "rehype-pretty-code";
-import rehypeSlug from "rehype-slug";
+import { markdownRehypePlugins } from "@/components/markdown/markdown-plugins";
 import { markdownComponents } from "@/components/markdown/markdown-elements";
 import {
   markdownRemarkPlugins,
@@ -15,34 +14,24 @@ type MarkdownContentProps = {
   kind: "regular" | "heartwork";
 };
 
-export async function MarkdownContent({ children, kind }: MarkdownContentProps) {
+export async function MarkdownContent({ children }: MarkdownContentProps) {
   "use cache";
   cacheLife("max");
 
   return (
-    <div className={markdownProseClassName(kind)}>
-      <MarkdownAsync
-        skipHtml
-        remarkPlugins={markdownRemarkPlugins}
-        remarkRehypeOptions={markdownRemarkRehypeOptions}
-        urlTransform={markdownUrlTransform}
-        components={markdownComponents}
-        rehypePlugins={[
-          rehypeSlug,
-          [
-            rehypePrettyCode,
-            {
-              keepBackground: false,
-              theme: {
-                light: "github-light",
-                dark: "github-dark-dimmed",
-              },
-            },
-          ],
-        ]}
-      >
-        {children}
-      </MarkdownAsync>
+    <div className="@container/markdown-reading min-w-0">
+      <div className={markdownProseClassName}>
+        <MarkdownAsync
+          skipHtml
+          remarkPlugins={markdownRemarkPlugins}
+          remarkRehypeOptions={markdownRemarkRehypeOptions}
+          urlTransform={markdownUrlTransform}
+          components={markdownComponents}
+          rehypePlugins={markdownRehypePlugins}
+        >
+          {children}
+        </MarkdownAsync>
+      </div>
     </div>
   );
 }

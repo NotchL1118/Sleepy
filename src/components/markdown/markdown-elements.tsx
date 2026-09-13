@@ -1,4 +1,7 @@
 import type { ComponentPropsWithoutRef } from "react";
+import type { ExtraProps } from "react-markdown";
+import { CodeBlock } from "./CodeBlock";
+import { MermaidBlock } from "./MermaidBlock";
 import {
   isAllowedMarkdownImageSrc,
   markdownLinkOpensInNewTab,
@@ -43,7 +46,25 @@ export function MarkdownImage(props: MarkdownImageProps) {
   );
 }
 
+function MarkdownPre({ node, children, className, style }: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
+  const source = String(node?.properties["data-code-source"] ?? "");
+  const language = String(node?.properties["data-code-language"] ?? "text");
+  if (language === "mermaid") return <MermaidBlock source={source} />;
+  return <CodeBlock source={source} language={language}>
+    <pre className={className} style={style} tabIndex={0} aria-label={`${language} 代码`}>
+      {children}
+    </pre>
+  </CodeBlock>;
+}
+
+function MarkdownTable({ node, ...props }: ComponentPropsWithoutRef<"table"> & ExtraProps) {
+  void node;
+  return <div data-markdown-table="" tabIndex={0} role="region" aria-label="表格，可横向滚动"><table {...props} /></div>;
+}
+
 export const markdownComponents = {
   a: MarkdownLink,
   img: MarkdownImage,
+  pre: MarkdownPre,
+  table: MarkdownTable,
 };

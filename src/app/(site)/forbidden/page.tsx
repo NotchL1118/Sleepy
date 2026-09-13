@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { SiteLink as Link } from "../components/SiteLink";
 import { SwitchAccountButton } from "./switch-account-button";
 
 export const metadata: Metadata = {

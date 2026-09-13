@@ -17,11 +17,13 @@ import { showToast } from "@/components/Toast";
 import { signInWithGitHub } from "@/lib/auth/client";
 import type { Viewer } from "@/lib/auth/types";
 import { useSignOut } from "@/lib/auth/useSignOut";
+import { SiteLink } from "../SiteLink";
 import styles from "./index.module.css";
 
 type ActiveSection = "home" | "regular" | "heartwork" | undefined;
 
 const HEADER_FADE_DISTANCE = 80;
+const HEADER_REVEAL_BUFFER = 50;
 
 const navigation: ReadonlyArray<{
   label: string;
@@ -206,6 +208,7 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
   const pathname = usePathname();
   const headerRef = useRef<HTMLElement>(null);
   const lastScrollYRef = useRef(0);
+  const upwardScrollRef = useRef(0);
   const headerOpacityRef = useRef(1);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loginPending, setLoginPending] = useState(false);
@@ -237,15 +240,29 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
         headerHasOpenMenu ||
         headerRef.current?.matches(":focus-within")
       ) {
+        upwardScrollRef.current = 0;
         headerOpacityRef.current = 1;
         setHeaderOpacity(1);
         return;
       }
 
       if (delta !== 0) {
+        let fadeDelta = delta;
+        if (delta > 0) {
+          upwardScrollRef.current = 0;
+        } else {
+          // Consume the upward buffer before restoring opacity, including
+          // when a single scroll event crosses the buffer boundary.
+          const bufferedDistance = Math.min(
+            -delta,
+            HEADER_REVEAL_BUFFER - upwardScrollRef.current,
+          );
+          upwardScrollRef.current += bufferedDistance;
+          fadeDelta += bufferedDistance;
+        }
         const nextOpacity = Math.min(
           1,
-          Math.max(0, headerOpacityRef.current - delta / HEADER_FADE_DISTANCE),
+          Math.max(0, headerOpacityRef.current - fadeDelta / HEADER_FADE_DISTANCE),
         );
         headerOpacityRef.current = nextOpacity;
         setHeaderOpacity(nextOpacity);
@@ -279,6 +296,7 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
     <header
       ref={headerRef}
       onFocusCapture={() => {
+        upwardScrollRef.current = 0;
         headerOpacityRef.current = 1;
         setHeaderOpacity(1);
       }}
@@ -289,13 +307,13 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
     >
       <div className="mx-auto w-full max-w-[1160px]">
         <div className={`${styles.glass} flex items-center justify-between rounded-full p-[5px] min-[821px]:hidden`}>
-          <Link
+          <SiteLink
             href="/"
             aria-label="Sleepy 首页"
             className="rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <BrandAvatar />
-          </Link>
+          </SiteLink>
           <div className="relative">
             <button
               type="button"
@@ -306,58 +324,58 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
             >
               <MenuIcon />
             </button>
-            {mobileOpen ? (
-              <nav
-                aria-label="移动端导航"
-                className={`${styles.glass} ${styles.mobilePanel}`}
-              >
-                <ThemeToggle showLabel />
-                {navigation.map(({ label, href, section }) => (
-                  <Link
-                    key={label}
-                    href={href}
-                    aria-current={activeSection === section ? "page" : undefined}
-                    onClick={() => setMobileOpen(false)}
-                    className={`flex min-h-12 items-center rounded-xl px-3 text-[15px] font-medium transition-colors hover:bg-foreground/5.5 ${
-                      activeSection === section ? "bg-foreground/7" : ""
-                    }`}
-                  >
-                    {label}
-                  </Link>
-                ))}
-                <div className="mt-2 border-t border-border pt-2">
-                  <AccountActions
-                    {...accountActions}
-                    onLogin={() => {
-                      setMobileOpen(false);
-                      handleGitHubLogin();
-                    }}
-                    onSignOut={() => {
-                      setMobileOpen(false);
-                      signOut();
-                    }}
-                  />
-                </div>
-              </nav>
-            ) : null}
+            {/* Keep links mounted so closing the menu preserves navigation pending. */}
+            <nav
+              hidden={!mobileOpen}
+              aria-label="移动端导航"
+              className={`${styles.glass} ${styles.mobilePanel}`}
+            >
+              <ThemeToggle showLabel />
+              {navigation.map(({ label, href, section }) => (
+                <SiteLink
+                  key={label}
+                  href={href}
+                  aria-current={activeSection === section ? "page" : undefined}
+                  onClick={() => setMobileOpen(false)}
+                  className={`flex min-h-12 items-center rounded-xl px-3 text-[15px] font-medium transition-colors hover:bg-foreground/5.5 ${
+                    activeSection === section ? "bg-foreground/7" : ""
+                  }`}
+                >
+                  {label}
+                </SiteLink>
+              ))}
+              <div className="mt-2 border-t border-border pt-2">
+                <AccountActions
+                  {...accountActions}
+                  onLogin={() => {
+                    setMobileOpen(false);
+                    handleGitHubLogin();
+                  }}
+                  onSignOut={() => {
+                    setMobileOpen(false);
+                    signOut();
+                  }}
+                />
+              </div>
+            </nav>
           </div>
         </div>
 
         <div className="hidden grid-cols-[1fr_auto_1fr] items-center gap-4 min-[821px]:grid">
-          <Link
+          <SiteLink
             href="/"
             aria-label="Sleepy 首页"
             className={`${styles.glass} grid size-[52px] place-items-center justify-self-start rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`}
           >
             <BrandAvatar />
-          </Link>
+          </SiteLink>
 
           <nav
             aria-label="主要导航"
             className={`${styles.glass} flex min-h-[52px] items-center gap-0.5 rounded-full p-[5px]`}
           >
             {navigation.map(({ label, href, section }) => (
-              <Link
+              <SiteLink
                 key={label}
                 href={href}
                 aria-current={activeSection === section ? "page" : undefined}
@@ -368,14 +386,14 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
                 }`}
               >
                 {label}
-              </Link>
+              </SiteLink>
             ))}
-            <Link
+            <SiteLink
               href="/#recent"
               className="flex min-h-10 items-center rounded-full px-4 text-[15px] font-medium text-muted transition-colors hover:bg-foreground/5.5 hover:text-foreground"
             >
               更多
-            </Link>
+            </SiteLink>
           </nav>
 
           <div className={`${styles.glass} flex items-center gap-0.5 justify-self-end rounded-full p-[5px]`}>

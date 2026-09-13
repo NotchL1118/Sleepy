@@ -1,17 +1,20 @@
 import { Suspense, type ReactNode } from "react";
+import { connection } from "next/server";
 import { SiteHeader } from "./components/SiteHeader";
+import { SiteFrame } from "./components/SiteLoading";
 import { getViewer } from "@/server/auth";
 
 function HeaderFallback() {
   return (
     <div
       aria-hidden="true"
-      className="min-h-[76px] min-[821px]:min-h-[92px]"
+      className="min-h-[var(--site-header-height)]"
     />
   );
 }
 
 async function ViewerHeader() {
+  await connection();
   const viewer = await getViewer();
 
   return (
@@ -23,11 +26,14 @@ async function ViewerHeader() {
 
 export default function SiteLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-dvh">
-      <Suspense fallback={<HeaderFallback />}>
-        <ViewerHeader />
-      </Suspense>
+    <SiteFrame
+      header={
+        <Suspense fallback={<HeaderFallback />}>
+          <ViewerHeader />
+        </Suspense>
+      }
+    >
       {children}
-    </div>
+    </SiteFrame>
   );
 }

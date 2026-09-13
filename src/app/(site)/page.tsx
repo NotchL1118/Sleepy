@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { SiteLink as Link } from "./components/SiteLink";
 import { siteConfig } from "@/config/site";
 import { postDescription, postPath } from "@/lib/posts/content";
 import { listRecentPosts } from "@/server/posts/public-posts";

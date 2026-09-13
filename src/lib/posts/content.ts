@@ -62,7 +62,7 @@ export function extractPostHeadings(markdown: string): readonly PostHeading[] {
     const title = toString(node).trim();
     const id = slugger.slug(title);
 
-    if (title && (node.depth === 2 || node.depth === 3)) {
+    if (title && (node.depth === 1 || node.depth === 2 || node.depth === 3 || node.depth === 4)) {
       headings.push({ depth: node.depth, id, title });
     }
   });
