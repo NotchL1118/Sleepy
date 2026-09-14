@@ -14,7 +14,8 @@ const messages: Record<AiErrorCode, string> = {
   cancelled: '模型调用已取消。',
   timeout: '模型调用超时，请手动重试。',
   invalid_input: '请提供有效的请求标识、编辑版本及完整 Markdown 正文。',
-  input_too_large: '完整文章与指令超出当前模型容量；长文摘要暂未支持，请调整模型配置后手动重试。',
+  non_convergent: '长文要点未能有效缩短，无法在模型容量内完成生成，请手动重试。',
+  input_too_large: '标题、指令或最小正文片段超出当前模型容量，请调整模型配置后手动重试。',
 };
 export class AiError extends Error {
   readonly code: AiErrorCode;

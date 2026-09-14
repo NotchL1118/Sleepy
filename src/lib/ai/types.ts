@@ -27,7 +27,7 @@ export type AiConfiguration = {
 };
 export type AiErrorCode = 'forbidden' | 'invalid_configuration' | 'configuration_missing' |
   'conflict' | 'storage_failed' | 'credential_unavailable' | 'disabled' | 'target_blocked' |
-  'provider_failed' | 'invalid_response' | 'cancelled' | 'timeout' | 'invalid_input' | 'input_too_large';
+  'provider_failed' | 'invalid_response' | 'cancelled' | 'timeout' | 'invalid_input' | 'input_too_large' | 'non_convergent';
 export type AiResult<T> = { ok: true; value: T } | { ok: false; error: { code: AiErrorCode; message: string } };
 export type AiUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type AiDiagnostic = {

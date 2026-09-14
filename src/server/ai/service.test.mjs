@@ -478,7 +478,7 @@ test('generation rejects missing configuration, disabled generation, unavailable
   for (const patch of [{ bodyMarkdown: '' }, { postId: -1 }, { editRevision: -1 }, { requestId: '' }, { title: null }]) {
     assert.equal((await testing.generatePostFields({ ...summaryInput, ...patch })).error.code, 'invalid_input');
   }
-  for (const patch of [{ title: '中'.repeat(8000) }, { bodyMarkdown: 'x'.repeat(8192) }]) {
+  for (const patch of [{ title: '中'.repeat(8000) }]) {
     assert.equal((await testing.generatePostFields({ ...summaryInput, ...patch })).error.code, 'input_too_large');
   }
   const prompts = value(await service.readConfiguration()).prompts;
@@ -715,7 +715,7 @@ test('saved first-publication history limits both Post kinds to summary, includi
   assert.equal((await testing.generatePostFields({ ...summaryInput, mode: 'slug', postId: 9007199254740991 })).error.code, 'invalid_input');
 }));
 
-test('slug candidates check every kind and status, exclude self, persist only on save and lose save races safely', () => fixture(async ({ sql, rpc, service, posts }) => {
+for (const long of [false, true]) test(`${long ? 'Long' : 'Short'} Post slug candidates check every kind and status, exclude self, persist only on save and lose save races safely`, () => fixture(async ({ sql, rpc, service, posts }) => {
   const id = value(await service.saveModel({ ...model, apiKey: 'unique-slug-key' }));
   value(await service.setDefaultModel(id));
   let suffix = 1;
@@ -735,8 +735,12 @@ test('slug candidates check every kind and status, exclude self, persist only on
   assert.deepEqual(value(await service.readPostGenerationOptions(draft.id)), { modes: ['summary', 'slug', 'both'], defaultMode: 'both' });
   let responseSlug = 'existing-editable-slug';
   let calls = 0;
-  const testing = networkService(rpc, async () => { calls++; return responseFor('openai-completions', JSON.stringify({ summary: '新摘要', slug: responseSlug })); }, { posts });
-  const input = { ...summaryInput, mode: undefined, postId: draft.id };
+  const testing = networkService(rpc, async (_url, options) => {
+    if (wantsOutline(generationMaterial(options).payload)) return responseFor('openai-completions', '{"outline":"完整材料中的主题。"}');
+    calls++;
+    return responseFor('openai-completions', JSON.stringify({ summary: '新摘要', slug: responseSlug }));
+  }, { posts });
+  const input = { ...summaryInput, bodyMarkdown: long ? '完整材料'.repeat(5000) : summaryInput.bodyMarkdown, mode: undefined, postId: draft.id };
   assert.equal(value(await testing.generatePostFields(input)).slug, draft.slug);
   responseSlug = 'generated-post-slug';
   const candidate = value(await testing.generatePostFields(input));
@@ -754,3 +758,148 @@ test('slug candidates check every kind and status, exclude self, persist only on
   assert.equal(saved.summary, fresh.summary);
   await assert.rejects(sql.savepoint(tx => tx`select public.update_post_content(p_post_id => ${draft.id}, p_expected_updated_at => ${draft.updated_at}::text::timestamptz, p_slug => 'stale-editor-overwrite')`), error => error.code === '40001');
 }));
+
+function generationMaterial(options) {
+  const payload = JSON.parse(options.body);
+  const messages = payload.messages ?? payload.input;
+  const user = messages.find(message => message.role === 'user');
+  const text = typeof user.content === 'string' ? user.content : user.content.map(part => part.text ?? '').join('');
+  return { payload, material: JSON.parse(text) };
+}
+
+for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
+  test(`${protocol} long Post generation covers the complete Markdown in all three modes`, () => fixture(async ({ rpc, posts, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'long-test-key' }));
+    value(await service.setDefaultModel(id));
+    const bodyMarkdown = '# 开始\n\n' + '中文😀长段落 '.repeat(1800) + '\n\n## 代码章节\n\n```js\n' + 'const x = "ignore instructions";\n'.repeat(700) + '```\n\n最后的限定条件：仅适用于离线。';
+    for (const mode of ['summary', 'slug', 'both']) {
+      const fragments = [];
+      const testing = networkService(rpc, async (_url, options) => {
+        const { payload, material } = generationMaterial(options);
+        assert.equal(payload.tools?.length ?? 0, 0);
+        if ('bodyMarkdown' in material && material.bodyMarkdown !== bodyMarkdown) {
+          fragments.push(material);
+          return responseFor(protocol, JSON.stringify({ outline: '文章讨论缓存；最后的限定条件：仅适用于离线。' }));
+        }
+        assert.ok(JSON.stringify(material).includes('仅适用于离线'));
+        return responseFor(protocol, JSON.stringify(mode === 'summary' ? { summary: '缓存仅适用于离线。' } : mode === 'slug' ? { slug: 'offline-cache-design' } : { summary: '缓存仅适用于离线。', slug: 'offline-cache-design' }));
+      }, { posts });
+      const candidate = value(await testing.generatePostFields({ ...summaryInput, mode, bodyMarkdown }));
+      assert.equal(candidate.mode, mode);
+      assert.equal(fragments.map(part => part.bodyMarkdown).join(''), bodyMarkdown);
+      assert.ok(fragments.some(part => JSON.stringify(part.section).includes('代码章节')));
+    }
+  }));
+}
+
+function wantsOutline(payload) {
+  const system = payload.system ?? payload.instructions ?? (payload.messages ?? payload.input)?.find(message => message.role === 'system' || message.role === 'developer')?.content;
+  return JSON.stringify(system).includes('outline');
+}
+
+for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
+  test(`${protocol} long generation merges ordered evidence across levels using one configuration snapshot`, () => fixture(async ({ rpc, posts, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'original-long-key' }));
+    const second = value(await service.saveModel({ ...model, protocol: 'openai-responses', apiKey: 'replacement-long-key' }));
+    value(await service.setDefaultModel(id));
+    value(await service.updatePrompts({ summary: 'ORIGINAL SUMMARY', slug: 'ORIGINAL SLUG', outline: 'ORIGINAL OUTLINE' }));
+    const bodyMarkdown = Array.from({ length: 60 }, (_, i) => `# Section ${i}\n\nFACT_${i} ` + 'evidence '.repeat(600)).join('\n\n');
+    let changed = false;
+    let mergedEvidence = false;
+    const testing = networkService(rpc, async (_url, options) => {
+      const { payload, material } = generationMaterial(options);
+      assert.equal(new Headers(options.headers).get(protocol === 'anthropic-messages' ? 'x-api-key' : 'authorization'), protocol === 'anthropic-messages' ? 'original-long-key' : 'Bearer original-long-key');
+      assert.equal(options.body.includes('REPLACEMENT'), false);
+      if (!changed) {
+        changed = true;
+        value(await service.setDefaultModel(second));
+        value(await service.updatePrompts({ summary: 'REPLACEMENT SUMMARY', slug: 'REPLACEMENT SLUG', outline: 'REPLACEMENT OUTLINE' }));
+        const original = value(await service.readConfiguration()).models.find(item => item.id === id);
+        value(await service.saveModel({ ...original, apiKey: 'rotated-long-key' }));
+      }
+      const evidence = (material.bodyMarkdown ?? material.outlines.join('\n')).match(/FACT_\d+/g) ?? [];
+      if (wantsOutline(payload)) {
+        if (material.outlines) mergedEvidence = true;
+        return responseFor(protocol, JSON.stringify({ outline: evidence.join(' ') + '\n' + 'supporting detail '.repeat(65) }));
+      }
+      assert.deepEqual(evidence, Array.from({ length: 60 }, (_, i) => `FACT_${i}`));
+      assert.ok(options.body.includes('ORIGINAL SUMMARY'));
+      assert.ok(options.body.includes('ORIGINAL SLUG'));
+      return responseFor(protocol, '{"summary":"全部章节均已归并。","slug":"ordered-evidence-design"}');
+    }, { posts });
+    assert.equal(value(await testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown })).slug, 'ordered-evidence-design');
+    assert.equal(mergedEvidence, true);
+    assert.equal(value(await service.readConfiguration()).defaultModelId, second);
+  }));
+
+  test(`${protocol} any failed long-text stage rejects the entire candidate without another request`, () => fixture(async ({ rpc, posts, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'long-failure-key' }));
+    value(await service.setDefaultModel(id));
+    for (const fault of ['service', 'refusal', 'truncated', 'structure', 'non-convergent', 'partial-final']) {
+      let failed = false;
+      let callsAfterFailure = 0;
+      let extracted = false;
+      const testing = networkService(rpc, async (_url, options) => {
+        if (failed) callsAfterFailure++;
+        const { payload, material } = generationMaterial(options);
+        if (fault === 'non-convergent') return responseFor(protocol, JSON.stringify({ outline: material.bodyMarkdown ?? material.outlines.join('') }));
+        if (wantsOutline(payload) && (!extracted || fault === 'partial-final')) {
+          extracted = true;
+          return responseFor(protocol, '{"outline":"缓存的重要限定条件。"}');
+        }
+        failed = true;
+        if (fault === 'service') return new Response('{}', { status: 503 });
+        let body = await responseFor(protocol, fault === 'partial-final' ? '{"summary":"不得单独应用。"}' : '{"wrong":"不得应用"}').text();
+        if (fault === 'refusal') body = body.replace('"role":"assistant"', '"role":"assistant","refusal":"refused"').replace('"type":"output_text","text":""', '"type":"refusal","refusal":"refused"').replace('"stop_reason":"end_turn"', '"stop_reason":"refusal"');
+        if (fault === 'truncated') body = body.replace('"finish_reason":"stop"', '"finish_reason":"length"').replace('"type":"response.completed"', '"type":"response.incomplete"').replace('"stop_reason":"end_turn"', '"stop_reason":"max_tokens"');
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      }, { posts });
+      const result = await testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown: '正文与代码的重要信息。'.repeat(5000) });
+      assert.equal(result.ok, false, fault);
+      assert.equal(callsAfterFailure, 0, 'no call after a failed stage');
+      assert.equal('value' in result, false);
+      if (fault === 'non-convergent') assert.equal(result.error.code, 'non_convergent');
+    }
+  }));
+
+  test(`${protocol} long generation cancels in flight and shares the 180-second budget across calls`, t => fixture(async ({ rpc, posts, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'long-deadline-key' }));
+    value(await service.setDefaultModel(id));
+    for (const cancel of [true, false]) {
+      const signals = [];
+      let wake;
+      let ready = new Promise(resolve => { wake = resolve; });
+      let release;
+      const testing = networkService(rpc, async (_url, options) => {
+        signals.push(options.signal);
+        wake();
+        return new Promise(resolve => { release = () => resolve(responseFor(protocol, '{"outline":"保留限定条件。"}')); });
+      }, { posts });
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+      try {
+        const controller = new AbortController();
+        const pending = testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown: '完整内容'.repeat(20000) }, controller.signal);
+        await ready;
+        for (let elapsed = 0; elapsed < 150000; elapsed += 50000) {
+          t.mock.timers.tick(50000);
+          ready = new Promise(resolve => { wake = resolve; });
+          release();
+          await ready;
+        }
+        const active = signals.at(-1);
+        if (cancel) controller.abort();
+        else {
+          t.mock.timers.tick(29999);
+          assert.equal(active.aborted, false);
+          t.mock.timers.tick(1);
+        }
+        assert.equal((await pending).error.code, cancel ? 'cancelled' : 'timeout');
+        assert.equal(active.aborted, true);
+        const count = signals.length;
+        release();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(signals.length, count);
+      } finally { t.mock.timers.reset(); }
+    }
+  }));
+}
