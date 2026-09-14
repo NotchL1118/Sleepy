@@ -1,9 +1,10 @@
-# On-demand Summary generation
+# On-demand Post field generation
 
-Issue [#18](https://github.com/NotchL1118/Sleepy/issues/18) adds the summary-only backend use case. Call `generateAiSummary` from `src/server/ai/actions.ts`, or `aiService().generateSummary` from server-only code. Configuration reads and management remain in the existing AI module. Every generation authorizes the cookie-bound Admin before reading model configuration or sending material. Generation accepts no endpoint, key, permission flag, generation mode, or model override.
+Issues [#18](https://github.com/NotchL1118/Sleepy/issues/18) and [#19](https://github.com/NotchL1118/Sleepy/issues/19) provide on-demand Summary and Slug candidates. Call `generateAiPostFields` from `src/server/ai/actions.ts`, or `aiService().generatePostFields` from server-only code. Configuration reads and management remain in the existing AI module. Every generation authorizes the cookie-bound Admin before reading model configuration or sending material. Generation accepts no endpoint, key, permission flag or model override.
 
 ```ts
-const result = await generateAiSummary({
+const result = await generateAiPostFields({
+  mode: 'summary', // Omit to use the server-derived default.
   requestId: crypto.randomUUID(),
   editRevision: editor.editRevision,
   title: editor.title,
@@ -13,17 +14,56 @@ const result = await generateAiSummary({
 });
 ```
 
-Success is `{ ok: true, value: { requestId, editRevision, postId?, summary } }`. Failure is `{ ok: false, error: { code, message } }`, with a fixed, sanitized message. Failures contain no partial candidate. `invalid_input` rejects malformed correlation/material; `input_too_large` rejects material and instructions that cannot fit; the existing configuration, authorization, provider, timeout, cancellation and invalid-response error categories remain applicable. No SDK response or reasoning escapes the interface. Usage stays in the existing sanitized model-call diagnostic, not the candidate. A successful model-call diagnostic means the protocol/text call completed; summary JSON validation can still reject that text.
+For summary mode, success is `{ ok: true, value: { requestId, editRevision, postId?, mode: 'summary', summary } }`. Failure is `{ ok: false, error: { code, message } }`, with a fixed, sanitized message. Failures contain no partial candidate. `invalid_input` rejects malformed correlation/material; `input_too_large` rejects material and instructions that cannot fit; the existing configuration, authorization, provider, timeout, cancellation and invalid-response error categories remain applicable. No SDK response or reasoning escapes the interface. Usage stays in the existing sanitized model-call diagnostic, not the candidate. A successful model-call diagnostic means the protocol/text call completed; summary JSON validation can still reject that text.
 
-Generation captures the editing primitives before its first await, then reads one atomic default-model/settings snapshot and decrypts that snapshot's credential. A later default, key or prompt change affects later attempts. Only the title and complete Markdown body are sent as material; no saved summary, comment lookup, URL fetching, image download or tools are supplied. Post identity is correlation only: generation neither reads nor mutates a saved Post, so it supports new content and both Post kinds in all lifecycle states. The stored summary prompt sets the initial Chinese, roughly 100–200-character target; length is a style goal, not a database constraint. The result must be one JSON object with only a nonempty single-paragraph summary string.
+Generation captures the editing primitives before its first await, then reads one atomic default-model/settings snapshot and decrypts that snapshot's credential. A later default, key or prompt change affects later attempts. Only the title and complete Markdown body are sent as material; no saved summary, comment lookup, URL fetching, image download or tools are supplied. Generation reads saved Post publication history to determine the allowed modes, but never mutates a Post. Both Post kinds use the same contract. The stored summary prompt sets the initial Chinese, roughly 100–200-character target; length is a style goal, not a database constraint. The result must be one JSON object containing exactly the selected fields, with a nonempty single-paragraph summary string when selected.
+
+## Modes, Slug checks and saving
+
+Issue #19 extends the summary-only backend into `generateAiPostFields(input)` in
+`src/server/ai/actions.ts`. Its application boundary is
+`createAiService(...).generatePostFields(input, signal?)`. It accepts the current
+`title`, full `bodyMarkdown`, a unique `requestId`, an `editRevision`, an optional
+saved `postId`, and optional `mode: 'summary' | 'slug' | 'both'`.
+
+Use `readAiPostGenerationOptions(postId?)` to obtain available modes and the
+default. Unsaved Posts and saved Posts with no first publication default to
+`both`. A saved Post with `published_at` set permits only `summary`, even after
+archival or withdrawal to draft. Generation rereads this history on the server;
+client status and editability flags grant no capability. Unknown Post IDs fail.
+
+The selected stored instructions are combined into one model call. Success
+returns the request correlation fields, resolved `mode`, and only the selected
+`summary` and/or `slug`. Missing instructions, incomplete protocol output, empty
+or invalid selected fields fail the entire attempt. Slugs reuse the Post format
+validator. A collision with any other Post, regardless of kind or status, is
+resolved by checking `-2`, `-3`, and subsequent numeric suffixes without another
+model call. These lookups do not reserve addresses or write Posts.
+
+Pass the result to `applyPostGenerationResult(current, result)` from
+`src/lib/ai/generation.ts`. The state contains both editing fields, the current
+`postId`, `editRevision`, and `latestRequestId`. Set a fresh request ID immediately
+on every attempt. Advance the revision on every title, body, or selected target
+edit, including undo/redo, and invalidate the request when its field selection
+changes. The helper discards failures and mismatched attempts unchanged, replaces
+only the selected fields on success, advances the revision and consumes the
+request ID. Both fields must be valid before either can change; existing text
+may be replaced. No editor control is introduced in this issue.
+
+Candidates persist only through the existing Post save action. The database
+still rejects a competing save that claims the Slug first, stale editing
+revisions, and changes to a previously published Slug. Generation never
+invalidates public caches. The existing 60-second model-call and 180-second
+overall deadlines include the new reads and collision checks; there is no
+automatic retry, fallback, history or auto-save.
 
 ## Applying a result
 
-Use `applySummaryResult` from `src/lib/ai/summary.ts` with an editor state containing `latestRequestId`, `editRevision`, `postId?` and `summary`:
+Use `applyPostGenerationResult` from `src/lib/ai/generation.ts` with an editor state containing `latestRequestId`, `editRevision`, `postId?` and both `summary` and `slug`:
 
-1. Increment `editRevision` on **every title, body or summary edit**, including undo/redo. Keep it monotonic for the editor lifetime. Changing Post identity also invalidates pending candidates.
+1. Increment `editRevision` on **every title, body or selected target edit**, including undo/redo. Keep it monotonic for the editor lifetime. Changing Post identity also invalidates pending candidates.
 2. Before dispatch, assign a fresh unique `latestRequestId` immediately and include it and the current `editRevision` in the request. A new attempt makes older candidates stale even if that attempt later fails. Do not interpret dispatch as cancellation of older work.
-3. When the promise settles, apply against the **current** state (a functional state updater), not a captured render snapshot: `setEditor(current => applySummaryResult(current, result))`. The helper accepts only matching latest request, edit revision and Post identity. Failure or stale success returns the unchanged state. Applied success increments the revision and clears the request ID, preventing duplicate application.
+3. When the promise settles, apply against the **current** state (a functional state updater), not a captured render snapshot: `setEditor(current => applyPostGenerationResult(current, result))`. The helper accepts only matching latest request, edit revision and Post identity. Failure or stale success returns the unchanged state. Applied success increments the revision and clears the request ID, preventing duplicate application.
 4. A summary present before dispatch can be replaced. Continue to save through the existing `createPostDraft`, `createAndPublishPost`, or `updatePostContent` action, including the existing `expectedUpdatedAt` conflict token.
 
 Generation writes no Post, timestamp or public cache tag. Only the existing save actions persist the chosen candidate and invalidate the existing public list/detail caches. The public reader and metadata keep consuming the existing `summary` column. This ticket adds no Studio controls or public presentation.
@@ -51,4 +91,4 @@ node --env-file=<secured-env-file> scripts/ai-maintenance.mjs summary
 
 The second command summarizes fixed smoke-test text through the saved default configuration without writing a Post. Repeat with each required protocol as the default; inspect `ok: true` and a nonempty single-paragraph summary, without requiring identical wording. Record provider/model, date and outcome without credentials or raw provider responses. See [AI configuration](./ai-configuration.md) for operator environment and keyring setup.
 
-Verification on 2026-09-14: TypeScript and ESLint passed; `pnpm test` passed all 75 application tests and 191 pgTAP assertions. Independent code-review axes reported zero Standards findings and zero Spec findings. `pnpm build` encountered an environment `EPERM` when Turbopack's PostCSS worker attempted to bind a local port; the supported `pnpm exec next build --webpack` production build passed. The repository's default build command remains unchanged.
+Verification for #19 on 2026-09-14: TypeScript and ESLint passed; `pnpm test` passed all 87 application tests and 191 pgTAP assertions. Independent code-review axes reported zero Standards findings and zero Spec findings. `pnpm build` encountered an environment `EPERM` when Turbopack's PostCSS worker attempted to bind a local port; the supported `pnpm exec next build --webpack` production build passed. The repository's default build command remains unchanged.

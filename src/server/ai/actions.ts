@@ -1,10 +1,15 @@
 'use server';
-import type { AiModelInput, AiPrompts, AiSummaryInput } from '@/lib/ai/types';
+import type { AiModelInput, AiPrompts, AiPostGenerationInput } from '@/lib/ai/types';
 import { aiService } from './queries';
 import { failure } from './errors';
 
-export async function generateAiSummary(input: AiSummaryInput) {
-  try { return await (await aiService()).generateSummary(input); }
+export async function generateAiPostFields(input: AiPostGenerationInput) {
+  try { return await (await aiService()).generatePostFields(input); }
+  catch (error) { return failure(error); }
+}
+
+export async function readAiPostGenerationOptions(postId?: number) {
+  try { return await (await aiService()).readPostGenerationOptions(postId); }
   catch (error) { return failure(error); }
 }
 

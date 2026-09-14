@@ -3,7 +3,7 @@ import { registerHooks } from 'node:module';
 import postgres from 'postgres';
 registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === 'server-only') return { url: 'data:text/javascript,export{}', shortCircuit: true };
-  if (context.parentURL?.includes('/src/server/ai/') && specifier.startsWith('./') && !specifier.endsWith('.ts')) {
+  if ((context.parentURL?.includes('/src/server/ai/') || context.parentURL?.includes('/src/lib/ai/')) && specifier.startsWith('.') && !specifier.endsWith('.ts')) {
     return nextResolve(`${specifier}.ts`, context);
   }
   return nextResolve(specifier, context);
@@ -30,8 +30,8 @@ try {
     } });
     const result = command === 'versions' ? await service.credentialVersions() :
       command === 'rotate' ? await service.rotateCredentials() :
-      command === 'summary' ? await service.generateSummary({
-        requestId: crypto.randomUUID(), editRevision: 0, title: '摘要接入验证',
+      command === 'summary' ? await service.generatePostFields({
+        mode: 'summary', requestId: crypto.randomUUID(), editRevision: 0, title: '摘要接入验证',
         bodyMarkdown: '这是一次使用专用测试凭据的摘要接入验证。生成操作只返回候选，不保存文章，也不改变公开内容。',
       }) : await service.testConnection(process.argv[3]);
     if (!result.ok) throw new Error(result.error.code);

@@ -85,3 +85,6 @@ node --env-file=<secured-env-file> scripts/ai-maintenance.mjs test <saved-model-
 ```
 
 This reads and decrypts the saved credential and performs one minimal real request. Expect `ok: true`, `diagnostic.status: success` and usage if the service returns it. On failure, verify the exact base URL, protocol, model and capacity with that provider; retry manually after correcting the configuration. These real provider calls are not part of `pnpm test` and have not been run without explicitly supplied dedicated test credentials.
+
+
+For generation modes and the editor application contract, see [Post field generation](./ai-summary.md).

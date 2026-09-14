@@ -1,14 +1,18 @@
 import 'server-only';
-import type { AiConfiguration, AiModelInput, AiPrompts, AiTextRequest, AiDiagnostic, AiTextResult, AiSummaryInput } from '@/lib/ai/types';
+import type { AiConfiguration, AiModelInput, AiPrompts, AiTextRequest, AiDiagnostic, AiTextResult, AiPostGenerationInput, AiPostGenerationOptions } from '@/lib/ai/types';
 import { modelRecord, publicModel, validateId, validatePrompts, type ModelRecord, type SettingsRecord } from './configuration';
 import { decryptCredential, encryptCredential, environmentKeyring, type Keyring } from './credentials';
 import { AiError, result } from './errors';
 import { callModel } from './model';
 import type { NetworkBoundary } from './transport';
-import { generateSummary } from './summary';
+import { generatePostFields } from './generation';
 export type AiRpc = 'is_admin' | 'ai_list_configuration' | 'ai_save_model' | 'ai_update_settings' | 'ai_model_snapshot';
 export type AiDependencies = {
   rpc: (name: AiRpc, args?: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }>;
+  posts: {
+    read: (postId: number) => Promise<{ published_at: string | null } | null>;
+    isSlugTaken: (slug: string, postId?: number) => Promise<boolean>;
+  };
   keyring?: () => Keyring;
   network?: NetworkBoundary;
   recordDiagnostic?: (diagnostic: AiDiagnostic) => void;
@@ -47,6 +51,16 @@ export function createAiService(dependencies: AiDependencies) {
       },
     });
   }
+  async function generationOptions(postId?: number): Promise<AiPostGenerationOptions> {
+    await authorize();
+    if (postId !== undefined) {
+      if (!Number.isSafeInteger(postId) || postId <= 0) throw new AiError('invalid_input');
+      const post = await dependencies.posts.read(postId);
+      if (!post) throw new AiError('invalid_input');
+      if (post.published_at !== null) return { modes: ['summary'], defaultMode: 'summary' };
+    }
+    return { modes: ['summary', 'slug', 'both'], defaultMode: 'both' };
+  }
   async function credentialRecords() {
     const data = await rpc('ai_list_configuration') as { models: ModelRecord[] };
     const records: ModelRecord[] = [];
@@ -57,7 +71,14 @@ export function createAiService(dependencies: AiDependencies) {
     return records;
   }
   return {
-    generateSummary: (input: AiSummaryInput, signal?: AbortSignal) => generateSummary(input, () => snapshot(), signal),
+    generatePostFields: (input: AiPostGenerationInput, signal?: AbortSignal) => generatePostFields(input, () => snapshot(), {
+      options: generationOptions,
+      isSlugTaken: async (slug, postId) => {
+        await authorize();
+        return dependencies.posts.isSlugTaken(slug, postId);
+      },
+    }, signal),
+    readPostGenerationOptions: (postId?: number) => result(() => generationOptions(postId)),
     credentialVersions: () => result(async () => {
       await authorize();
       const versions: Record<string, number> = Object.create(null);

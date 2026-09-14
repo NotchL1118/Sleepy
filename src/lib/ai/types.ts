@@ -41,15 +41,26 @@ export type AiDiagnostic = {
 export type AiTextRequest = { system: string; text: string; maxOutputTokens: number; signal?: AbortSignal; timeoutMs?: number };
 export type AiTextResult = AiResult<{ text: string; usage: AiUsage }> & { diagnostic: AiDiagnostic };
 
-export type AiSummaryInput = {
+export type AiPostGenerationMode = 'summary' | 'slug' | 'both';
+export type AiPostGenerationOptions = {
+  modes: readonly AiPostGenerationMode[];
+  defaultMode: AiPostGenerationMode;
+};
+export type AiPostGenerationInput = {
   /** Unique per attempt, including manual retries. */
   requestId: string;
-  /** Increment on every title, body or summary edit, including undo/redo. */
+  /** Increment on every title, body or selected target edit, including undo/redo. */
   editRevision: number;
   title: string;
   bodyMarkdown: string;
-  /** Correlation only; generation never reads or writes the saved Post. */
+  /** Saved Post whose first-publication history must be checked on the server. */
   postId?: number;
+  /** Defaults to both before first publication, summary afterwards. */
+  mode?: AiPostGenerationMode;
 };
-export type AiSummaryCandidate = Pick<AiSummaryInput, 'requestId' | 'editRevision' | 'postId'> & { summary: string };
-export type AiSummaryResult = AiResult<AiSummaryCandidate>;
+export type AiPostGenerationFields =
+  | { mode: 'summary'; summary: string }
+  | { mode: 'slug'; slug: string }
+  | { mode: 'both'; summary: string; slug: string };
+export type AiPostGenerationCandidate = Pick<AiPostGenerationInput, 'requestId' | 'editRevision' | 'postId'> & AiPostGenerationFields;
+export type AiPostGenerationResult = AiResult<AiPostGenerationCandidate>;
