@@ -1,0 +1,27 @@
+import 'server-only';
+import type { AiErrorCode, AiResult } from '@/lib/ai/types';
+const messages: Record<AiErrorCode, string> = {
+  forbidden: '仅 Admin 可以管理或调用模型。',
+  invalid_configuration: '模型配置或指令无效，请检查输入。',
+  configuration_missing: '缺少模型或全站指令配置。',
+  conflict: '配置已变更，请重新读取后再保存。',
+  storage_failed: '配置暂时无法读取或保存。',
+  credential_unavailable: '模型密钥不可用，请检查部署主密钥或重新录入凭据。',
+  disabled: 'AI 调用或当前模型已停用。',
+  target_blocked: '模型接口地址或实际连接目标不被允许。',
+  provider_failed: '模型连接失败，请检查协议、模型和凭据后手动重试。',
+  invalid_response: '模型未返回完整有效的文本。',
+  cancelled: '模型调用已取消。',
+  timeout: '模型调用超时，请手动重试。',
+};
+export class AiError extends Error {
+  readonly code: AiErrorCode;
+  constructor(code: AiErrorCode) { super(messages[code]); this.code = code; }
+}
+export function failure(error: unknown): Extract<AiResult<never>, { ok: false }> {
+  const code = error instanceof AiError ? error.code : 'storage_failed';
+  return { ok: false, error: { code, message: messages[code] } };
+}
+export async function result<T>(work: () => Promise<T>): Promise<AiResult<T>> {
+  try { return { ok: true, value: await work() }; } catch (error) { return failure(error); }
+}

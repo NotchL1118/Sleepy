@@ -15,10 +15,12 @@
     "test": "pnpm test:app && pnpm test:db"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.1",
     "github-slugger": "^2.0.0",
     "gsap": "^3.15.0",
+    "ipaddr.js": "2.5.0",
     "mdast-util-to-string": "^4.0.0",
     "mermaid": "12.0.0",
     "motion": "^13.0.0",
@@ -31,6 +33,7 @@
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
+    "undici": "8.10.2",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0"
   },
@@ -42,6 +45,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "postgres": "3.4.9",
     "supabase": "^2.111.0",
     "tailwindcss": "^4",
     "typescript": "^5"
