@@ -1,8 +1,8 @@
 import 'server-only';
 import { createClient } from '@/utils/supabase/server';
 import { createAiService } from './service';
-import { DEEPSEEK_PRESET } from './configuration';
 import { AiError, result } from './errors';
+import type { AiGenerationAvailability } from '@/lib/ai/types';
 
 /** Each service operation independently checks the cookie-bound Admin allowlist RPC. */
 export async function aiService() {
@@ -29,13 +29,18 @@ export async function aiService() {
 export async function readAiConfiguration() {
   return (await aiService()).readConfiguration();
 }
+export async function readAiGenerationAvailability(): Promise<AiGenerationAvailability> {
+  const configuration = await result(readAiConfiguration);
+  if (!configuration.ok || !configuration.value.ok) {
+    return { available: false, message: 'AI 配置暂时不可用' };
+  }
+  const { enabled, models, defaultModelId } = configuration.value.value;
+  const model = models.find(item => item.id === defaultModelId);
+  if (!enabled) return { available: false, message: 'AI 已停用' };
+  if (!model?.keySet) return { available: false, message: '请先配置 AI' };
+  return { available: true, message: null };
+}
 /** Server-only capability: no API key, ciphertext, DB record or SDK structure escapes. */
 export async function readAiSnapshot() {
   return (await aiService()).readSnapshot();
-}
-export async function readAiPresets() {
-  const service = await aiService();
-  const configuration = await service.readConfiguration();
-  if (!configuration.ok) return configuration;
-  return result(async () => [DEEPSEEK_PRESET]);
 }

@@ -1,6 +1,6 @@
 'use server';
-import type { AiModelInput, AiPrompts, AiPostGenerationInput } from '@/lib/ai/types';
-import { aiService } from './queries';
+import type { AiConnectionInput, AiModelInput, AiPrompts, AiPostGenerationInput } from '@/lib/ai/types';
+import { aiService, readAiGenerationAvailability } from './queries';
 import { failure } from './errors';
 
 export async function generateAiPostFields(input: AiPostGenerationInput) {
@@ -14,16 +14,31 @@ export async function readAiPostGenerationOptions(postId?: number) {
 }
 
 export async function saveAiModel(input: AiModelInput) {
-  return (await aiService()).saveModel(input);
+  try { return await (await aiService()).saveModel(input); }
+  catch (error) { return failure(error); }
 }
 export async function setDefaultAiModel(id: string | null) {
-  return (await aiService()).setDefaultModel(id);
+  try { return await (await aiService()).setDefaultModel(id); }
+  catch (error) { return failure(error); }
 }
-export async function setAiEnabled(enabled: boolean) {
-  return (await aiService()).setEnabled(enabled);
+export async function deleteAiModel(id: string, revision: number) {
+  try { return await (await aiService()).deleteModel(id, revision); }
+  catch (error) { return failure(error); }
 }
-export async function updateAiPrompts(prompts: AiPrompts) {
-  return (await aiService()).updatePrompts(prompts);
+export async function saveAiPreferences(enabled: boolean, prompts: AiPrompts) {
+  try { return await (await aiService()).savePreferences(enabled, prompts); }
+  catch (error) { return failure(error); }
+}
+export async function fetchAiModels(input: AiConnectionInput) {
+  try { return await (await aiService()).discoverModels(input); }
+  catch (error) { return failure(error); }
+}
+export async function testAiModel(input: AiModelInput) {
+  try { return await (await aiService()).testModel(input); }
+  catch (error) { return failure(error); }
+}
+export async function refreshAiGenerationAvailability() {
+  return readAiGenerationAvailability();
 }
 export async function testAiConnection(id: string) {
   return (await aiService()).testConnection(id);

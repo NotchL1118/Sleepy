@@ -179,6 +179,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      ai_delete_model: {
+        Args: { p_expected_revision: number; p_id: string }
+        Returns: undefined
+      }
       ai_list_configuration: { Args: never; Returns: Json }
       ai_model_snapshot: { Args: { p_id?: string }; Returns: Json }
       ai_save_model: {

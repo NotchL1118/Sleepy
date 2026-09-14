@@ -25,7 +25,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
   const timer = setTimeout(() => { timedOut = true; timerController.abort(); }, timeoutMs);
   const protocol = protocols[record.protocol];
   let transport: ReturnType<typeof protectedTransport> | undefined;
-  let invalidEnvelope = false;
+  let responseError: AiError | undefined;
   let removeAbortListener = () => {};
   const diagnostic = (status: AiDiagnostic['status'], usage?: AiUsage): AiDiagnostic => ({
     modelId: record.id, protocol: record.protocol, status, durationMs: Date.now() - started,
@@ -39,7 +39,9 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     transport = protectedTransport(record.endpoint, protocol.resource, signal, network);
     const model = {
       id: record.model, name: record.name, api: record.protocol, provider: 'sleepy-custom', baseUrl: record.endpoint,
-      reasoning: false, input: ['text'], contextWindow: record.context_window, maxTokens: record.max_output_tokens,
+      // Required SDK metadata; these direct stream adapters do not use it to budget or trim input.
+      // The remote API is the authority on the actual context limit.
+      reasoning: false, input: ['text'], contextWindow: Number.MAX_SAFE_INTEGER, maxTokens: record.max_output_tokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } satisfies Model<typeof record.protocol>;
     const context: Context = { systemPrompt: request.system, messages: [{ role: 'user', content: request.text, timestamp: started }] };
@@ -47,7 +49,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const response = await protectedFetch(input, init);
       try { return await validateProtocolResponse(response, record.protocol); }
-      catch (error) { invalidEnvelope = error instanceof AiError; throw error; }
+      catch (error) { if (error instanceof AiError) responseError = error; throw error; }
     };
     const options: StreamOptions = { apiKey, fetch, signal, maxRetries: 0, timeoutMs,
       maxTokens: request.maxOutputTokens, cacheRetention: 'none',
@@ -63,7 +65,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     const output = await Promise.race([stream.result(), cancelled]);
     if (signal.aborted) throw new AiError(timedOut ? 'timeout' : 'cancelled');
     if (transport.blocked) throw new AiError('target_blocked');
-    if (invalidEnvelope) throw new AiError('invalid_response');
+    if (responseError) throw responseError;
     if (output.stopReason === 'error' || output.stopReason === 'aborted') throw new AiError('provider_failed');
     if (output.stopReason !== 'stop' || output.content.some(part => part.type !== 'text' && part.type !== 'thinking')) throw new AiError('invalid_response');
     const text = output.content.filter(part => part.type === 'text').map(part => part.text).join('').trim();

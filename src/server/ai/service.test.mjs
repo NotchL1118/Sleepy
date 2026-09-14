@@ -51,7 +51,15 @@ async function fixture(run) {
   } catch (error) { if (error !== rollback) throw error; }
 }
 test.after(() => db.end());
-const model = { name: 'Test model', protocol: 'openai-completions', endpoint: 'https://model.example/v1', model: 'test-model', contextWindow: 8192, maxOutputTokens: 512, enabled: true };
+const model = { name: 'Test model', protocol: 'openai-completions', endpoint: 'https://model.example/v1', model: 'test-model', maxOutputTokens: 512 };
+
+// Preference edits now persist their switch and instructions in one operation.
+async function setEnabled(service, enabled) {
+  return service.savePreferences(enabled, value(await service.readConfiguration()).prompts);
+}
+async function updatePrompts(service, prompts) {
+  return service.savePreferences(value(await service.readConfiguration()).enabled, prompts);
+}
 
 test('Admin saves multiple models and reads only credential status after persistence', () => fixture(async ({ service }) => {
   const first = await service.saveModel({ ...model, apiKey: 'test-secret-one' });
@@ -110,8 +118,8 @@ for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-mes
   }));
 }
 
-test('credential rotation includes disabled models and leaves no references to the old key version', () => fixture(async ({ rpc, service }) => {
-  const saved = await service.saveModel({ ...model, enabled: false, apiKey: 'old-key-test' });
+test('credential rotation includes inactive connections and leaves no references to the old key version', () => fixture(async ({ rpc, service }) => {
+  const saved = await service.saveModel({ ...model, apiKey: 'old-key-test' });
   assert.equal(saved.ok, true);
   const rotatedService = createAiService({ rpc, keyring: () => ({ activeVersion: 'v2', keys: { ...keyring.keys, v2: Buffer.alloc(32, 18).toString('base64') } }) });
   const rotated = await rotatedService.rotateCredentials();
@@ -136,9 +144,12 @@ test('every application entry rejects Readers and anonymous callers before any m
     await sql`select set_config('request.jwt.claim.sub', '99999999-9999-4999-8999-999999999918', true)`;
     for (const invoke of [
       () => protectedService.readConfiguration(), () => protectedService.saveModel({ ...model, apiKey: 'never-sent' }),
-      () => protectedService.setDefaultModel(id), () => protectedService.setEnabled(false),
-      () => protectedService.updatePrompts({ summary: 's', slug: 's', outline: 's' }),
+      () => protectedService.setDefaultModel(id),
+      () => protectedService.savePreferences(false, { summary: 's', slug: 's' }),
+      () => protectedService.deleteModel(id, 1),
+      () => protectedService.discoverModels({ ...model, apiKey: 'never-sent' }),
       () => protectedService.readSnapshot(id), () => protectedService.testConnection(id),
+      () => protectedService.testModel({ ...model, apiKey: 'never-sent' }),
       () => protectedService.rotateCredentials(), () => protectedService.credentialVersions(),
       () => protectedService.generatePostFields(summaryInput),
     ]) assert.equal((await invoke()).error.code, 'forbidden');
@@ -146,14 +157,71 @@ test('every application entry rejects Readers and anonymous callers before any m
   assert.equal(requests, 0);
 }));
 
+for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
+  test(`unsaved ${protocol} connection tests use the submitted form without persisting it`, () => fixture(async ({ rpc, service }) => {
+    const selected = value(await service.saveModel({ ...model, apiKey: 'saved-default-secret' }));
+    value(await service.setDefaultModel(selected));
+    value(await setEnabled(service, false));
+    const before = value(await service.readConfiguration());
+    const requests = [];
+    const testing = networkService(rpc, async (url, options) => { requests.push({ url, options }); return responseFor(protocol); });
+    const tested = await testing.testModel({ ...model, protocol, endpoint: 'https://unsaved.example/v1', model: 'unsaved-model', apiKey: 'unsaved-secret' });
+    assert.equal(tested.ok, true, JSON.stringify(tested));
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].url.toString(), /^https:\/\/unsaved\.example\//);
+    assert.equal(JSON.parse(requests[0].options.body).model, 'unsaved-model');
+    assert.equal(new Headers(requests[0].options.headers).get(protocol === 'anthropic-messages' ? 'x-api-key' : 'authorization'), protocol === 'anthropic-messages' ? 'unsaved-secret' : 'Bearer unsaved-secret');
+    assert.equal(JSON.stringify(tested).includes('secret'), false);
+    assert.deepEqual(value(await service.readConfiguration()), before);
+  }));
+}
+
+test('form testing reuses a saved key only for its original target and current revision', () => fixture(async ({ rpc, service }) => {
+  const id = value(await service.saveModel({ ...model, apiKey: 'original-secret' }));
+  const saved = value(await service.readConfiguration()).models.find(item => item.id === id);
+  const keys = [];
+  const testing = networkService(rpc, async (_url, options) => {
+    keys.push(new Headers(options.headers).get('authorization'));
+    return responseFor('openai-completions');
+  });
+  value(await testing.testModel({ ...saved, model: 'edited-model' }));
+  assert.deepEqual(keys, ['Bearer original-secret']);
+  for (const input of [
+    { ...saved, endpoint: 'https://different.example/v1' },
+    { ...saved, protocol: 'openai-responses' },
+    { ...saved, apiKey: null },
+    { ...model },
+  ]) assert.equal((await testing.testModel(input)).error.code, 'credential_unavailable');
+  assert.equal(keys.length, 1);
+  value(await testing.testModel({ ...saved, endpoint: 'https://different.example/v1', apiKey: 'replacement-secret' }));
+  assert.equal(keys[1], 'Bearer replacement-secret');
+  assert.deepEqual(value(await service.readConfiguration()).models.find(item => item.id === id), saved);
+  value(await service.saveModel({ ...saved, name: 'new revision' }));
+  assert.equal((await testing.testModel(saved)).error.code, 'conflict');
+  assert.equal(keys.length, 2);
+}));
+
+test('failed and blocked form connection tests preserve configuration and sanitize errors', () => fixture(async ({ rpc, service }) => {
+  const before = value(await service.readConfiguration());
+  let requests = 0;
+  const testing = networkService(rpc, async () => { requests++; throw new Error('unsaved-secret https://sensitive.example'); });
+  const failed = await testing.testModel({ ...model, apiKey: 'unsaved-secret' });
+  assert.equal(failed.error.code, 'provider_failed');
+  assert.equal(JSON.stringify(failed).includes('unsaved-secret'), false);
+  assert.equal(JSON.stringify(failed).includes('sensitive.example'), false);
+  assert.equal((await testing.testModel({ ...model, endpoint: 'https://127.0.0.1', apiKey: 'unsaved-secret' })).error.code, 'target_blocked');
+  assert.equal(requests, 1);
+  assert.deepEqual(value(await service.readConfiguration()), before);
+}));
+
 test('prompt edits persist and a generation snapshot retains its original model and instructions', () => fixture(async ({ rpc, service }) => {
   const first = value(await service.saveModel({ ...model, apiKey: 'snapshot-test-key' }));
   value(await service.setDefaultModel(first));
-  const prompts = { summary: '中文概括', slug: 'English slug', outline: 'Preserve qualifications' };
-  value(await service.updatePrompts(prompts));
+  const prompts = { summary: '中文概括', slug: 'English slug' };
+  value(await updatePrompts(service, prompts));
   const current = value(await networkService(rpc).readSnapshot());
   assert.deepEqual(current.prompts, prompts);
-  value(await service.updatePrompts({ ...prompts, summary: 'Changed' }));
+  value(await updatePrompts(service, { ...prompts, summary: 'Changed' }));
   value(await service.setDefaultModel(null));
   assert.deepEqual(current.prompts, prompts);
   assert.equal(current.model.id, first);
@@ -200,18 +268,16 @@ test('missing and wrong master keys, corrupt ciphertext and swapped credentials 
 }));
 
 test('unusable configurations fail before transmission and disabling persists', () => fixture(async ({ rpc, service }) => {
-  for (const patch of [{ protocol: 'oauth' }, { contextWindow: 0 }, { maxOutputTokens: 8192 }, { contextWindow: 4.5 }, { apiKey: '' }, { apiKey: 'sk-ant-oat01-test-oauth-token' }, { endpoint: 'http://public.example' }, { endpoint: 'https://public.example/v1?api_key=secret' }]) {
+  for (const patch of [{ protocol: 'oauth' }, { maxOutputTokens: 0 }, { maxOutputTokens: 2147483648 }, { maxOutputTokens: 4.5 }, { apiKey: '' }, { apiKey: 'sk-ant-oat01-test-oauth-token' }, { endpoint: 'http://public.example' }, { endpoint: 'https://public.example/v1?api_key=secret' }]) {
     assert.equal((await service.saveModel({ ...model, ...patch })).ok, false);
   }
   const id = value(await service.saveModel({ ...model, apiKey: 'disable-key' }));
   value(await service.setDefaultModel(id));
-  value(await service.setEnabled(false));
+  value(await setEnabled(service, false));
   assert.equal(value(await service.readConfiguration()).enabled, false);
   assert.equal((await service.testConnection(id)).error.code, 'disabled');
-  value(await service.setEnabled(true));
-  const saved = value(await service.readConfiguration()).models.find(m => m.id === id);
-  value(await service.saveModel({ ...saved, enabled: false }));
-  assert.equal((await networkService(rpc).testConnection(id)).error.code, 'disabled');
+  value(await setEnabled(service, true));
+  assert.equal((await networkService(rpc).testConnection(id)).ok, true);
 }));
 
 for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
@@ -462,7 +528,7 @@ for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-mes
   }));
 }
 
-test('generation rejects missing configuration, disabled generation, unavailable keys, malformed input and excess capacity before transmission', () => fixture(async ({ rpc, service }) => {
+test('generation rejects missing configuration, disabled generation, unavailable keys, malformed input before transmission', () => fixture(async ({ rpc, service }) => {
   let requests = 0;
   const testing = networkService(rpc, async () => { requests++; return responseFor('openai-completions'); });
   assert.equal((await testing.generatePostFields(summaryInput)).error.code, 'configuration_missing');
@@ -472,18 +538,12 @@ test('generation rejects missing configuration, disabled generation, unavailable
   assert.equal((await testing.generatePostFields(summaryInput)).error.code, 'credential_unavailable');
   const saved = value(await service.readConfiguration()).models[0];
   value(await service.saveModel({ ...saved, apiKey: 'capacity-test-key' }));
-  value(await service.setEnabled(false));
+  value(await setEnabled(service, false));
   assert.equal((await testing.generatePostFields(summaryInput)).error.code, 'disabled');
-  value(await service.setEnabled(true));
+  value(await setEnabled(service, true));
   for (const patch of [{ bodyMarkdown: '' }, { postId: -1 }, { editRevision: -1 }, { requestId: '' }, { title: null }]) {
     assert.equal((await testing.generatePostFields({ ...summaryInput, ...patch })).error.code, 'invalid_input');
   }
-  for (const patch of [{ title: '中'.repeat(8000) }]) {
-    assert.equal((await testing.generatePostFields({ ...summaryInput, ...patch })).error.code, 'input_too_large');
-  }
-  const prompts = value(await service.readConfiguration()).prompts;
-  value(await service.updatePrompts({ ...prompts, summary: '长指令'.repeat(3000) }));
-  assert.equal((await testing.generatePostFields(summaryInput)).error.code, 'input_too_large');
   assert.equal(requests, 0);
 }));
 
@@ -492,7 +552,7 @@ test('an in-flight generation retains its model, key, instructions and editing s
   const second = value(await service.saveModel({ ...model, name: 'Second', apiKey: 'snapshot-second-key' }));
   value(await service.setDefaultModel(id));
   const prompts = value(await service.readConfiguration()).prompts;
-  value(await service.updatePrompts({ ...prompts, summary: 'ORIGINAL INSTRUCTION' }));
+  value(await updatePrompts(service, { ...prompts, summary: 'ORIGINAL INSTRUCTION' }));
   const input = { ...summaryInput };
   const sent = [];
   const testing = networkService(rpc, async (_url, options) => {
@@ -500,7 +560,7 @@ test('an in-flight generation retains its model, key, instructions and editing s
     input.title = 'Changed after request';
     input.editRevision++;
     value(await service.setDefaultModel(second));
-    value(await service.updatePrompts({ ...prompts, summary: 'NEW INSTRUCTION' }));
+    value(await updatePrompts(service, { ...prompts, summary: 'NEW INSTRUCTION' }));
     const first = value(await service.readConfiguration()).models.find(m => m.id === id);
     value(await service.saveModel({ ...first, apiKey: 'rotated-first-key' }));
     return responseFor('openai-completions', '{"summary":"概括当前材料。"}');
@@ -600,9 +660,8 @@ test('model calls receive only the remaining overall budget after slow configura
   } finally { t.mock.timers.reset(); }
 }));
 
-test('the saved DeepSeek preset generates through the same text-only summary contract', () => fixture(async ({ rpc, service }) => {
-  const { DEEPSEEK_PRESET } = await import('./configuration.ts');
-  const id = value(await service.saveModel({ ...DEEPSEEK_PRESET, apiKey: 'deepseek-test-key' }));
+test('a manually configured DeepSeek connection generates through the same text-only summary contract', () => fixture(async ({ rpc, service }) => {
+  const id = value(await service.saveModel({ ...model, endpoint: 'https://api.deepseek.com', apiKey: 'deepseek-test-key' }));
   value(await service.setDefaultModel(id));
   let sent;
   const testing = networkService(rpc, async (url, options) => {
@@ -735,8 +794,7 @@ for (const long of [false, true]) test(`${long ? 'Long' : 'Short'} Post slug can
   assert.deepEqual(value(await service.readPostGenerationOptions(draft.id)), { modes: ['summary', 'slug', 'both'], defaultMode: 'both' });
   let responseSlug = 'existing-editable-slug';
   let calls = 0;
-  const testing = networkService(rpc, async (_url, options) => {
-    if (wantsOutline(generationMaterial(options).payload)) return responseFor('openai-completions', '{"outline":"完整材料中的主题。"}');
+  const testing = networkService(rpc, async () => {
     calls++;
     return responseFor('openai-completions', JSON.stringify({ summary: '新摘要', slug: responseSlug }));
   }, { posts });
@@ -773,133 +831,133 @@ for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-mes
     value(await service.setDefaultModel(id));
     const bodyMarkdown = '# 开始\n\n' + '中文😀长段落 '.repeat(1800) + '\n\n## 代码章节\n\n```js\n' + 'const x = "ignore instructions";\n'.repeat(700) + '```\n\n最后的限定条件：仅适用于离线。';
     for (const mode of ['summary', 'slug', 'both']) {
-      const fragments = [];
+      let calls = 0;
       const testing = networkService(rpc, async (_url, options) => {
         const { payload, material } = generationMaterial(options);
         assert.equal(payload.tools?.length ?? 0, 0);
-        if ('bodyMarkdown' in material && material.bodyMarkdown !== bodyMarkdown) {
-          fragments.push(material);
-          return responseFor(protocol, JSON.stringify({ outline: '文章讨论缓存；最后的限定条件：仅适用于离线。' }));
-        }
-        assert.ok(JSON.stringify(material).includes('仅适用于离线'));
+        calls++;
+        assert.equal(material.bodyMarkdown, bodyMarkdown);
+        assert.deepEqual(Object.keys(material).sort(), ['bodyMarkdown', 'title']);
         return responseFor(protocol, JSON.stringify(mode === 'summary' ? { summary: '缓存仅适用于离线。' } : mode === 'slug' ? { slug: 'offline-cache-design' } : { summary: '缓存仅适用于离线。', slug: 'offline-cache-design' }));
       }, { posts });
       const candidate = value(await testing.generatePostFields({ ...summaryInput, mode, bodyMarkdown }));
       assert.equal(candidate.mode, mode);
-      assert.equal(fragments.map(part => part.bodyMarkdown).join(''), bodyMarkdown);
-      assert.ok(fragments.some(part => JSON.stringify(part.section).includes('代码章节')));
+      assert.equal(calls, 1);
     }
   }));
-}
-
-function wantsOutline(payload) {
-  const system = payload.system ?? payload.instructions ?? (payload.messages ?? payload.input)?.find(message => message.role === 'system' || message.role === 'developer')?.content;
-  return JSON.stringify(system).includes('outline');
 }
 
 for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
-  test(`${protocol} long generation merges ordered evidence across levels using one configuration snapshot`, () => fixture(async ({ rpc, posts, service }) => {
-    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'original-long-key' }));
-    const second = value(await service.saveModel({ ...model, protocol: 'openai-responses', apiKey: 'replacement-long-key' }));
-    value(await service.setDefaultModel(id));
-    value(await service.updatePrompts({ summary: 'ORIGINAL SUMMARY', slug: 'ORIGINAL SLUG', outline: 'ORIGINAL OUTLINE' }));
-    const bodyMarkdown = Array.from({ length: 60 }, (_, i) => `# Section ${i}\n\nFACT_${i} ` + 'evidence '.repeat(600)).join('\n\n');
-    let changed = false;
-    let mergedEvidence = false;
-    const testing = networkService(rpc, async (_url, options) => {
-      const { payload, material } = generationMaterial(options);
-      assert.equal(new Headers(options.headers).get(protocol === 'anthropic-messages' ? 'x-api-key' : 'authorization'), protocol === 'anthropic-messages' ? 'original-long-key' : 'Bearer original-long-key');
-      assert.equal(options.body.includes('REPLACEMENT'), false);
-      if (!changed) {
-        changed = true;
-        value(await service.setDefaultModel(second));
-        value(await service.updatePrompts({ summary: 'REPLACEMENT SUMMARY', slug: 'REPLACEMENT SLUG', outline: 'REPLACEMENT OUTLINE' }));
-        const original = value(await service.readConfiguration()).models.find(item => item.id === id);
-        value(await service.saveModel({ ...original, apiKey: 'rotated-long-key' }));
-      }
-      const evidence = (material.bodyMarkdown ?? material.outlines.join('\n')).match(/FACT_\d+/g) ?? [];
-      if (wantsOutline(payload)) {
-        if (material.outlines) mergedEvidence = true;
-        return responseFor(protocol, JSON.stringify({ outline: evidence.join(' ') + '\n' + 'supporting detail '.repeat(65) }));
-      }
-      assert.deepEqual(evidence, Array.from({ length: 60 }, (_, i) => `FACT_${i}`));
-      assert.ok(options.body.includes('ORIGINAL SUMMARY'));
-      assert.ok(options.body.includes('ORIGINAL SLUG'));
-      return responseFor(protocol, '{"summary":"全部章节均已归并。","slug":"ordered-evidence-design"}');
-    }, { posts });
-    assert.equal(value(await testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown })).slug, 'ordered-evidence-design');
-    assert.equal(mergedEvidence, true);
-    assert.equal(value(await service.readConfiguration()).defaultModelId, second);
-  }));
-
-  test(`${protocol} any failed long-text stage rejects the entire candidate without another request`, () => fixture(async ({ rpc, posts, service }) => {
-    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'long-failure-key' }));
-    value(await service.setDefaultModel(id));
-    for (const fault of ['service', 'refusal', 'truncated', 'structure', 'non-convergent', 'partial-final']) {
-      let failed = false;
-      let callsAfterFailure = 0;
-      let extracted = false;
-      const testing = networkService(rpc, async (_url, options) => {
-        if (failed) callsAfterFailure++;
-        const { payload, material } = generationMaterial(options);
-        if (fault === 'non-convergent') return responseFor(protocol, JSON.stringify({ outline: material.bodyMarkdown ?? material.outlines.join('') }));
-        if (wantsOutline(payload) && (!extracted || fault === 'partial-final')) {
-          extracted = true;
-          return responseFor(protocol, '{"outline":"缓存的重要限定条件。"}');
-        }
-        failed = true;
-        if (fault === 'service') return new Response('{}', { status: 503 });
-        let body = await responseFor(protocol, fault === 'partial-final' ? '{"summary":"不得单独应用。"}' : '{"wrong":"不得应用"}').text();
-        if (fault === 'refusal') body = body.replace('"role":"assistant"', '"role":"assistant","refusal":"refused"').replace('"type":"output_text","text":""', '"type":"refusal","refusal":"refused"').replace('"stop_reason":"end_turn"', '"stop_reason":"refusal"');
-        if (fault === 'truncated') body = body.replace('"finish_reason":"stop"', '"finish_reason":"length"').replace('"type":"response.completed"', '"type":"response.incomplete"').replace('"stop_reason":"end_turn"', '"stop_reason":"max_tokens"');
-        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-      }, { posts });
-      const result = await testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown: '正文与代码的重要信息。'.repeat(5000) });
-      assert.equal(result.ok, false, fault);
-      assert.equal(callsAfterFailure, 0, 'no call after a failed stage');
-      assert.equal('value' in result, false);
-      if (fault === 'non-convergent') assert.equal(result.error.code, 'non_convergent');
+  test(`${protocol} discovers models with the current target and credential without requiring or saving a model`, () => fixture(async ({ rpc, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'discovery-secret' }));
+    const saved = value(await service.readConfiguration()).models[0];
+    const before = value(await service.readConfiguration());
+    const requests = [];
+    const testing = networkService(rpc, async (url, options) => {
+      requests.push({ url, options });
+      const next = protocol === 'anthropic-messages' && requests.length === 1;
+      return Response.json({ data: next ? [{ id: 'model-b' }] : [{ id: 'model-a' }, { id: 'model-b' }], has_more: next, last_id: 'model-b' });
+    });
+    const input = { id, revision: saved.revision, endpoint: saved.endpoint, protocol };
+    assert.deepEqual(value(await testing.discoverModels(input)), ['model-a', 'model-b']);
+    assert.equal(requests.length, protocol === 'anthropic-messages' ? 2 : 1);
+    for (const { url, options } of requests) {
+      assert.equal(options.method, 'GET');
+      assert.equal(options.body, undefined);
+      assert.equal(options.redirect, 'manual');
+      const headers = new Headers(options.headers);
+      assert.equal(headers.get(protocol === 'anthropic-messages' ? 'x-api-key' : 'authorization'), protocol === 'anthropic-messages' ? 'discovery-secret' : 'Bearer discovery-secret');
+      assert.ok(url.startsWith(saved.endpoint + (protocol === 'anthropic-messages' ? '/v1/models?limit=100' : '/models')));
     }
+    if (protocol === 'anthropic-messages') {
+      assert.match(requests[1].url, /after_id=model-b$/);
+      assert.equal(new Headers(requests[0].options.headers).get('anthropic-version'), '2023-06-01');
+    }
+    assert.deepEqual(value(await service.readConfiguration()), before);
+    assert.equal((await testing.discoverModels({ ...input, endpoint: 'https://other.example/v1' })).error.code, 'credential_unavailable');
+    assert.equal((await testing.discoverModels({ ...input, revision: saved.revision + 1 })).error.code, 'conflict');
+    assert.deepEqual(value(await testing.discoverModels({ protocol, endpoint: saved.endpoint, apiKey: 'new-unsaved-key' })), ['model-a', 'model-b']);
+    assert.deepEqual(value(await service.readConfiguration()), before);
   }));
 
-  test(`${protocol} long generation cancels in flight and shares the 180-second budget across calls`, t => fixture(async ({ rpc, posts, service }) => {
-    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'long-deadline-key' }));
+  test(`${protocol} reports upstream context errors without splitting, retrying or returning a partial candidate`, () => fixture(async ({ rpc, service }) => {
+    const id = value(await service.saveModel({ ...model, protocol, apiKey: 'too-long-secret' }));
     value(await service.setDefaultModel(id));
-    for (const cancel of [true, false]) {
-      const signals = [];
-      let wake;
-      let ready = new Promise(resolve => { wake = resolve; });
-      let release;
-      const testing = networkService(rpc, async (_url, options) => {
-        signals.push(options.signal);
-        wake();
-        return new Promise(resolve => { release = () => resolve(responseFor(protocol, '{"outline":"保留限定条件。"}')); });
-      }, { posts });
-      t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
-      try {
-        const controller = new AbortController();
-        const pending = testing.generatePostFields({ ...summaryInput, mode: 'both', bodyMarkdown: '完整内容'.repeat(20000) }, controller.signal);
-        await ready;
-        for (let elapsed = 0; elapsed < 150000; elapsed += 50000) {
-          t.mock.timers.tick(50000);
-          ready = new Promise(resolve => { wake = resolve; });
-          release();
-          await ready;
-        }
-        const active = signals.at(-1);
-        if (cancel) controller.abort();
-        else {
-          t.mock.timers.tick(29999);
-          assert.equal(active.aborted, false);
-          t.mock.timers.tick(1);
-        }
-        assert.equal((await pending).error.code, cancel ? 'cancelled' : 'timeout');
-        assert.equal(active.aborted, true);
-        const count = signals.length;
-        release();
-        await new Promise(resolve => setImmediate(resolve));
-        assert.equal(signals.length, count);
-      } finally { t.mock.timers.reset(); }
+    for (const error of [
+      { code: 'context_length_exceeded', message: 'sensitive raw text too-long-secret' },
+      { type: 'invalid_request_error', message: 'prompt is too long: 250000 tokens > 200000 maximum' },
+    ]) {
+      let calls = 0;
+      const testing = networkService(rpc, async () => { calls++; return Response.json({ error }, { status: 400 }); });
+      const failed = await testing.generatePostFields({ ...summaryInput, bodyMarkdown: '完整长文'.repeat(20000) });
+      assert.equal(failed.error.code, 'input_too_large');
+      assert.equal(calls, 1);
+      assert.equal('value' in failed, false);
+      assert.equal(JSON.stringify(failed).includes('too-long-secret'), false);
     }
   }));
 }
+
+test('discovery rejects private DNS, redirects, malformed lists and reflected credentials with no fallback', () => fixture(async ({ rpc, service }) => {
+  const input = { protocol: model.protocol, endpoint: model.endpoint, apiKey: 'never-expose-me' };
+  const before = value(await service.readConfiguration());
+  let networkCalls = 0;
+  const blocked = createAiService({ rpc, network: { resolve: async () => [{ address: '127.0.0.1', family: 4 }], fetch: async () => { networkCalls++; return Response.json({ data: [] }); } } });
+  assert.equal((await blocked.discoverModels(input)).error.code, 'target_blocked');
+  assert.equal(networkCalls, 0);
+  for (const [response, code] of [
+    [new Response(null, { status: 302, headers: { location: 'https://127.0.0.1' } }), 'target_blocked'],
+    [new Response('never-expose-me', { status: 404 }), 'model_list_unavailable'],
+    [Response.json({ data: [{ id: 'never-expose-me' }] }), 'model_list_unavailable'],
+    [Response.json({ data: [{ id: 42 }] }), 'model_list_unavailable'],
+    [Response.json({ error: 'never-expose-me' }), 'model_list_unavailable'],
+  ]) {
+    let calls = 0;
+    const testing = networkService(rpc, async () => { calls++; return response; });
+    const failed = await testing.discoverModels(input);
+    assert.equal(failed.error.code, code);
+    assert.equal(JSON.stringify(failed).includes(input.apiKey), false);
+    assert.equal(calls, 1);
+  }
+  assert.deepEqual(value(await service.readConfiguration()), before);
+}));
+
+test('model discovery stops stalled responses at its own 15-second deadline', t => fixture(async ({ rpc }) => {
+  let signal;
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const testing = networkService(rpc, async (_url, options) => {
+    signal = options.signal;
+    started();
+    return new Response(new ReadableStream({ start() {} }));
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const pending = testing.discoverModels({ protocol: model.protocol, endpoint: model.endpoint, apiKey: 'timeout-key' });
+    await ready;
+    t.mock.timers.tick(15000);
+    assert.equal((await pending).error.code, 'timeout');
+    assert.equal(signal.aborted, true);
+  } finally { t.mock.timers.reset(); }
+}));
+
+test('preferences save together and deletion clears only the matching selected connection', () => fixture(async ({ service }) => {
+  const first = value(await service.saveModel({ ...model, apiKey: 'first-key' }));
+  const second = value(await service.saveModel({ ...model, apiKey: 'second-key' }));
+  value(await service.setDefaultModel(first));
+  const prompts = { summary: 'Custom summary', slug: 'Custom slug' };
+  value(await service.savePreferences(false, prompts));
+  assert.equal((await service.savePreferences(true, { summary: '', slug: 'invalid save' })).error.code, 'invalid_configuration');
+  const before = value(await service.readConfiguration());
+  assert.equal(before.enabled, false);
+  assert.deepEqual(before.prompts, prompts);
+  assert.equal((await service.deleteModel(first, 7)).error.code, 'conflict');
+  assert.deepEqual(value(await service.readConfiguration()), before);
+  value(await service.deleteModel(second, 1));
+  assert.equal(value(await service.readConfiguration()).defaultModelId, first);
+  value(await service.deleteModel(first, 1));
+  const after = value(await service.readConfiguration());
+  assert.equal(after.defaultModelId, null);
+  assert.deepEqual(after.models, []);
+  assert.deepEqual(after.prompts, prompts);
+}));

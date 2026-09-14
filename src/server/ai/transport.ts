@@ -27,7 +27,7 @@ export function validateEndpoint(value: string): URL {
 
 /** Resolve once per request, reject all non-public answers, then pin that address in the socket lookup.
  * TLS still verifies the original hostname. No global dispatcher, proxy env, redirects or second DNS lookup. */
-export function protectedTransport(endpoint: string, resource: string, signal: AbortSignal, boundary: NetworkBoundary = {}) {
+export function protectedTransport(endpoint: string, resource: string, signal: AbortSignal, boundary: NetworkBoundary = {}, method: 'POST' | 'GET' = 'POST') {
   const base = validateEndpoint(endpoint);
   const expected = `${base.href.replace(/\/$/, '')}${resource}`;
   const agents = new Set<Agent>();
@@ -36,7 +36,7 @@ export function protectedTransport(endpoint: string, resource: string, signal: A
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     try {
-      if (request.url !== expected || request.method !== 'POST') throw new AiError('target_blocked');
+      if (request.url !== expected || request.method !== method) throw new AiError('target_blocked');
       signal.throwIfAborted();
       const host = base.hostname.replace(/^\[|\]$/g, '');
       const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] :
@@ -50,7 +50,7 @@ export function protectedTransport(endpoint: string, resource: string, signal: A
       } });
       agents.add(dispatcher);
       const response = await (boundary.fetch ?? undiciFetch)(request.url, {
-        method: 'POST', headers: request.headers, body: await request.text(),
+        method, headers: request.headers, ...(method === 'POST' ? { body: await request.text() } : {}),
         signal, redirect: 'manual', dispatcher,
       });
       status = response.status;

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { readAiGenerationAvailability } from "@/server/ai/queries";
 import { notFound } from "next/navigation";
 import { PostEditor } from "../../components/PostEditor";
 import { getPostGroups, getStudioPost, getTags } from "@/server/posts/studio-post-editor";
@@ -18,15 +19,16 @@ export default async function Page({
 
   if (!Number.isSafeInteger(id) || id <= 0) notFound();
 
-  const [post, groups, tags] = await Promise.all([
+  const [post, groups, tags, aiAvailability] = await Promise.all([
     getStudioPost(id, "regular"),
     getPostGroups("regular"),
     getTags(),
+    readAiGenerationAvailability(),
   ]);
 
   if (!post) notFound();
 
   return (
-    <PostEditor post={post} groups={groups} kind="regular" tags={tags} />
+    <PostEditor post={post} groups={groups} kind="regular" tags={tags} aiAvailability={aiAvailability} />
   );
 }

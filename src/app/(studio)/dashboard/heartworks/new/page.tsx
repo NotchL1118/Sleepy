@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { readAiGenerationAvailability } from "@/server/ai/queries";
 import { PostEditor } from "../../components/PostEditor";
 import { getPostGroups, getTags } from "@/server/posts/studio-post-editor";
 
@@ -8,11 +9,12 @@ export const maxDuration = 200;
 export const instant = false;
 
 export default async function Page() {
-  const [groups, tags] = await Promise.all([
+  const [groups, tags, aiAvailability] = await Promise.all([
     getPostGroups("heartwork"),
     getTags(),
+    readAiGenerationAvailability(),
   ]);
   return (
-    <PostEditor post={null} groups={groups} kind="heartwork" tags={tags} />
+    <PostEditor post={null} groups={groups} kind="heartwork" tags={tags} aiAvailability={aiAvailability} />
   );
 }

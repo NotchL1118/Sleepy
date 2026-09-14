@@ -7,15 +7,15 @@ const messages: Record<AiErrorCode, string> = {
   conflict: '配置已变更，请重新读取后再保存。',
   storage_failed: '配置暂时无法读取或保存。',
   credential_unavailable: '模型密钥不可用，请检查部署主密钥或重新录入凭据。',
-  disabled: 'AI 调用或当前模型已停用。',
+  disabled: 'AI 生成已停用。',
   target_blocked: '模型接口地址或实际连接目标不被允许。',
   provider_failed: '模型连接失败，请检查协议、模型和凭据后手动重试。',
+  model_list_unavailable: '未能获取模型列表，请检查接口配置，或直接填写模型 ID。',
   invalid_response: '模型未返回完整有效的文本。',
   cancelled: '模型调用已取消。',
   timeout: '模型调用超时，请手动重试。',
   invalid_input: '请提供有效的请求标识、编辑版本及完整 Markdown 正文。',
-  non_convergent: '长文要点未能有效缩短，无法在模型容量内完成生成，请手动重试。',
-  input_too_large: '标题、指令或最小正文片段超出当前模型容量，请调整模型配置后手动重试。',
+  input_too_large: '全文超出接口的输入限制，请缩短输入或更换模型后重试。原有内容未修改。',
 };
 export class AiError extends Error {
   readonly code: AiErrorCode;

@@ -1,18 +1,18 @@
 export type AiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
-export type AiPrompts = { summary: string; slug: string; outline: string };
-export type AiModelInput = {
+export type AiPrompts = { summary: string; slug: string };
+export type AiConnectionInput = {
   id?: string;
   revision?: number;
-  name: string;
   protocol: AiProtocol;
   /** Provider API base URL, e.g. https://api.openai.com/v1 (not the resource path). */
   endpoint: string;
-  model: string;
-  contextWindow: number;
-  maxOutputTokens: number;
-  enabled: boolean;
   /** Omit to retain a credential; null clears it; a string replaces it. */
   apiKey?: string | null;
+};
+export type AiModelInput = AiConnectionInput & {
+  name: string;
+  model: string;
+  maxOutputTokens: number;
 };
 export type AiModelConfiguration = Omit<AiModelInput, 'apiKey' | 'id' | 'revision'> & {
   id: string;
@@ -25,9 +25,10 @@ export type AiConfiguration = {
   enabled: boolean;
   prompts: AiPrompts;
 };
+export type AiGenerationAvailability = { available: boolean; message: string | null };
 export type AiErrorCode = 'forbidden' | 'invalid_configuration' | 'configuration_missing' |
   'conflict' | 'storage_failed' | 'credential_unavailable' | 'disabled' | 'target_blocked' |
-  'provider_failed' | 'invalid_response' | 'cancelled' | 'timeout' | 'invalid_input' | 'input_too_large' | 'non_convergent';
+  'provider_failed' | 'model_list_unavailable' | 'invalid_response' | 'cancelled' | 'timeout' | 'invalid_input' | 'input_too_large';
 export type AiResult<T> = { ok: true; value: T } | { ok: false; error: { code: AiErrorCode; message: string } };
 export type AiUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type AiDiagnostic = {

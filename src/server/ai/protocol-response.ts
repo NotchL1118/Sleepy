@@ -11,13 +11,43 @@ function containsRefusal(value: unknown): boolean {
   return record.type === 'refusal' || (typeof record.type === 'string' && record.type.startsWith('response.refusal.')) ||
     Boolean(record.refusal) || Object.values(value).some(containsRefusal);
 }
+function inputLimitError(value: unknown): boolean {
+  const record = object(value);
+  const error = object(record.error ?? object(record.response).error ?? record);
+  return [error.code, error.type].some(code => typeof code === 'string' &&
+    /^(context_length_exceeded|context_window_exceeded|input_too_long|prompt_too_long)$/.test(code)) ||
+    typeof error.message === 'string' && /maximum context length|context (?:window|length).{0,60}exceed|prompt is too long|input is too long/i.test(error.message);
+}
 
 /** pi-ai merges Responses refusals into text and drops Chat refusal deltas.
  * Validate the protocol envelope before handing the same bytes to the real SDK.
  * This use case returns one atomic result, so buffering adds no visible latency.
  */
 export async function validateProtocolResponse(response: Response, protocol: AiProtocol): Promise<Response> {
-  if (!response.ok) return response; // Let the SDK classify HTTP failures, with retries disabled.
+  if (!response.ok) {
+    if (response.status === 413) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new AiError('input_too_large');
+    }
+    // Bound error bodies too. Never expose upstream messages or credentials to the caller.
+    const reader = response.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 65536) throw new AiError('provider_failed');
+        chunks.push(value);
+      }
+    } finally { if (reader) { void reader.cancel().catch(() => undefined); reader.releaseLock(); } }
+    const bytes = Buffer.concat(chunks);
+    let body: unknown;
+    try { body = JSON.parse(bytes.toString('utf8')); } catch { /* Non-JSON failures stay generic. */ }
+    if (inputLimitError(body)) throw new AiError('input_too_large');
+    return new Response(bytes, { status: response.status, headers: response.headers });
+  }
   if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) throw new AiError('invalid_response');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -42,6 +72,7 @@ export async function validateProtocolResponse(response: Response, protocol: AiP
     if (data === '[DONE]') return;
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch { throw new AiError('invalid_response'); }
+    if (inputLimitError(parsed)) throw new AiError('input_too_large');
     if (containsRefusal(parsed)) throw new AiError('invalid_response');
     const event = object(parsed);
     if (protocol === 'openai-completions' && Array.isArray(event.choices)) {
