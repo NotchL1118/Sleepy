@@ -1,6 +1,7 @@
 import type { SVGProps } from "react";
 
 export type IconProps = SVGProps<SVGSVGElement>;
+type SelectableIconProps = IconProps & { selected?: boolean };
 
 export function ChevronIcon({ className, ...props }: IconProps) {
   return (
@@ -32,6 +33,23 @@ export function CheckIcon({ className, ...props }: IconProps) {
       aria-hidden="true"
     >
       <path d="m3.5 8 3 3 6-6" />
+    </svg>
+  );
+}
+
+export function CrossIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      className={className}
+      {...props}
+      aria-hidden="true"
+    >
+      <path d="m4 4 8 8M12 4 4 12" />
     </svg>
   );
 }
@@ -155,27 +173,32 @@ export function DashboardIcon(props: IconProps) {
   );
 }
 
-export function DocumentIcon(props: IconProps) {
+export function DocumentIcon({ selected = false, ...props }: SelectableIconProps) {
   return (
     <LineIcon {...props}>
-      <path d="M6 3.5h8l4 4V20.5H6z" />
+      <path d="M6 3.5h8l4 4V20.5H6z" fill={selected ? "currentColor" : "none"} fillOpacity={selected ? 0.18 : undefined} />
       <path d="M14 3.5v4h4M9 12h6M9 16h6" />
     </LineIcon>
   );
 }
 
-export function HeartIcon(props: IconProps) {
+export function HeartIcon({ selected = false, ...props }: SelectableIconProps) {
   return (
     <LineIcon {...props}>
-      <path d="M20.5 8.8c0 5-8.5 10.2-8.5 10.2S3.5 13.8 3.5 8.8A4.3 4.3 0 0 1 12 7.7a4.3 4.3 0 0 1 8.5 1.1Z" />
+      <path d="M20.5 8.8c0 5-8.5 10.2-8.5 10.2S3.5 13.8 3.5 8.8A4.3 4.3 0 0 1 12 7.7a4.3 4.3 0 0 1 8.5 1.1Z" fill={selected ? "currentColor" : "none"} />
     </LineIcon>
   );
 }
 
-export function FolderIcon(props: IconProps) {
+export function FolderIcon({ selected = false, ...props }: SelectableIconProps) {
   return (
     <LineIcon {...props}>
-      <path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19z" />
+      {selected ? (
+        <>
+          <path d="M3.5 18.5v-12h6l2 2h8v3" />
+          <path d="M3.5 18.5 6.5 12h15l-3 8H5a1.5 1.5 0 0 1-1.5-1.5Z" fill="currentColor" fillOpacity="0.18" />
+        </>
+      ) : <path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19z" />}
     </LineIcon>
   );
 }
@@ -220,6 +243,25 @@ export function HomeIcon(props: IconProps) {
     <LineIcon {...props}>
       <path d="M4 11.5 12 4.5l8 7V20a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 20z" />
       <path d="M9.5 21.5v-7h5v7" />
+    </LineIcon>
+  );
+}
+
+export function ClockIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7v5l3.5 2" />
+    </LineIcon>
+  );
+}
+
+export function MoreIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <circle cx="5" cy="12" r="1" fill="currentColor" />
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="19" cy="12" r="1" fill="currentColor" />
     </LineIcon>
   );
 }

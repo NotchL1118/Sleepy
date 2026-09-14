@@ -9,6 +9,7 @@ import {
 } from "@/lib/posts/content";
 import type { AdjacentPost, PostPageData } from "@/lib/posts/types";
 import styles from "./index.module.css";
+import { PostNavigationLocation } from "../PostNavigation";
 
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   dateStyle: "long",
@@ -35,6 +36,7 @@ export async function PostContentPage({ page }: { page: PostPageData }) {
 
   return (
     <main className="pb-36 pt-8 sm:pt-10 min-[821px]:pt-12">
+      <PostNavigationLocation pathname={postPath(post)} kind={post.kind} group={post.group} />
       <article>
         <header className={`${styles.articleHeader} ${readingClass}`}>
           <h1 className={styles.articleTitle}>{post.title}</h1>

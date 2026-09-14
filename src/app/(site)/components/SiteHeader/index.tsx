@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
+import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import sleepyAvatar from "@/assets/brand/sleepy-avatar.png";
 import {
   DashboardIcon,
@@ -18,23 +19,38 @@ import { signInWithGitHub } from "@/lib/auth/client";
 import type { Viewer } from "@/lib/auth/types";
 import { useSignOut } from "@/lib/auth/useSignOut";
 import { SiteLink } from "../SiteLink";
+import { usePostNavigationLocation } from "../PostNavigation";
+import { PostMenu } from "./PostMenu";
+import { ActiveIndicator } from "./ActiveIndicator";
+import { NavigationIcon } from "./NavigationIcon";
+import { usePostNavigation } from "./usePostNavigation";
+import type { PostKind } from "@/lib/posts/types";
 import styles from "./index.module.css";
 
-type ActiveSection = "home" | "regular" | "heartwork" | undefined;
+type ActiveSection = "home" | "regular" | "heartwork" | "recent" | undefined;
 
 const HEADER_FADE_DISTANCE = 80;
 const HEADER_REVEAL_BUFFER = 50;
 
 const navigation: ReadonlyArray<{
   label: string;
-  href: "/" | "/#recent";
-  section?: ActiveSection;
+  href: string;
+  section: Exclude<ActiveSection, undefined>;
+  prefixes: readonly string[];
 }> = [
-  { label: "自述", href: "/", section: "home" },
-  { label: "文稿", href: "/#recent", section: "regular" },
-  { label: "心作", href: "/#recent", section: "heartwork" },
-  { label: "时光", href: "/#recent" },
+  { label: "自述", href: "/", section: "home", prefixes: ["/"] },
+  { label: "文稿", href: "/posts", section: "regular", prefixes: ["/posts", "/categories"] },
+  { label: "心作", href: "/heartworks", section: "heartwork", prefixes: ["/heartworks", "/columns"] },
+  { label: "时光", href: "/recent", section: "recent", prefixes: ["/recent"] },
 ];
+
+function matchesPath(pathname: string, prefix: string) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function resolveActiveSection(pathname: string): ActiveSection {
+  return navigation.find(({ prefixes }) => prefixes.some((prefix) => matchesPath(pathname, prefix)))?.section;
+}
 
 function BrandAvatar() {
   return (
@@ -211,18 +227,102 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
   const upwardScrollRef = useRef(0);
   const headerOpacityRef = useRef(1);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileWrapperRef = useRef<HTMLDivElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuId = useId();
+  const navigationLayoutId = useId();
+  const [expanded, setExpanded] = useState<{ kind: PostKind; mobile: boolean } | null>(null);
+  const [previousPathname, setPreviousPathname] = useState(pathname);
+  const location = usePostNavigationLocation(pathname);
+  const { resources, load } = usePostNavigation();
   const [loginPending, setLoginPending] = useState(false);
   const [headerOpacity, setHeaderOpacity] = useState(1);
   const { signingOut, signOut } = useSignOut();
   const pending = loginPending || signingOut;
-  const activeSection: ActiveSection =
-    pathname === "/"
-      ? "home"
-      : pathname.startsWith("/posts/")
-        ? "regular"
-        : pathname.startsWith("/heartworks/")
-          ? "heartwork"
-          : undefined;
+  const activeSection = resolveActiveSection(pathname);
+
+  if (previousPathname !== pathname) {
+    setPreviousPathname(pathname);
+    setExpanded(null);
+    setMobileOpen(false);
+  }
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 821px)");
+    function closeOnResize() {
+      setExpanded(null);
+      setMobileOpen(false);
+    }
+    media.addEventListener("change", closeOnResize);
+    return () => media.removeEventListener("change", closeOnResize);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    function outside(event: PointerEvent) {
+      if (!mobileWrapperRef.current?.contains(event.target as Node)) {
+        setMobileOpen(false);
+        setExpanded(null);
+      }
+    }
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setMobileOpen(false);
+      setExpanded(null);
+      mobileTriggerRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [mobileOpen]);
+
+  function renderNavigation(mobile: boolean) {
+    return navigation.map(({ label, href, section }) => {
+      if (section === "regular" || section === "heartwork") {
+        return (
+          <PostMenu
+            key={section}
+            kind={section}
+            mobile={mobile}
+            active={activeSection === section}
+            currentGroup={location?.kind === section ? location.group : undefined}
+            pathname={pathname}
+            open={expanded?.kind === section && expanded.mobile === mobile && (!mobile || mobileOpen)}
+            resource={resources[section]}
+            onOpen={() => {
+              setExpanded({ kind: section, mobile });
+              load(section);
+              headerOpacityRef.current = 1;
+              setHeaderOpacity(1);
+            }}
+            onClose={() => setExpanded((current) => current?.kind === section && current.mobile === mobile ? null : current)}
+            onNavigate={() => {
+              setExpanded(null);
+              setMobileOpen(false);
+            }}
+            onRetry={() => load(section)}
+          />
+        );
+      }
+      return (
+        <motion.div key={section} layout={mobile ? false : "position"}>
+          <SiteLink
+            href={href}
+            aria-current={activeSection === section ? "page" : undefined}
+            onClick={() => { setExpanded(null); setMobileOpen(false); }}
+            className={`flex items-center text-[15px] font-medium transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent ${mobile ? "min-h-12 rounded-xl px-3 hover:bg-foreground/5.5" : "relative min-h-10 rounded-full px-4"} ${activeSection === section ? `${mobile ? "bg-foreground/7" : ""} text-foreground` : "text-muted"}`}
+          >
+            {!mobile && activeSection === section ? <ActiveIndicator /> : null}
+            <NavigationIcon kind={section} selected={activeSection === section} />
+            <motion.span layout={mobile ? false : "position"} className="inline-block">{label}</motion.span>
+          </SiteLink>
+        </motion.div>
+      );
+    });
+  }
 
   useEffect(() => {
     lastScrollYRef.current = Math.max(window.scrollY, 0);
@@ -314,36 +414,27 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
           >
             <BrandAvatar />
           </SiteLink>
-          <div className="relative">
+          <div ref={mobileWrapperRef} className="relative">
             <button
+              ref={mobileTriggerRef}
               type="button"
               aria-label={mobileOpen ? "关闭导航" : "打开导航"}
               aria-expanded={mobileOpen}
-              onClick={() => setMobileOpen((value) => !value)}
+              aria-controls={mobileMenuId}
+              onClick={() => { setMobileOpen((value) => !value); setExpanded(null); }}
               className="grid size-11 place-items-center rounded-full transition-colors hover:bg-foreground/5.5 focus-visible:outline-2 focus-visible:outline-accent"
             >
               <MenuIcon />
             </button>
             {/* Keep links mounted so closing the menu preserves navigation pending. */}
             <nav
+              id={mobileMenuId}
               hidden={!mobileOpen}
               aria-label="移动端导航"
-              className={`${styles.glass} ${styles.mobilePanel}`}
+              className={`${styles.mobilePanel} max-h-[calc(100dvh-6rem)] overflow-y-auto overscroll-contain border border-border bg-background shadow-lg`}
             >
               <ThemeToggle showLabel />
-              {navigation.map(({ label, href, section }) => (
-                <SiteLink
-                  key={label}
-                  href={href}
-                  aria-current={activeSection === section ? "page" : undefined}
-                  onClick={() => setMobileOpen(false)}
-                  className={`flex min-h-12 items-center rounded-xl px-3 text-[15px] font-medium transition-colors hover:bg-foreground/5.5 ${
-                    activeSection === section ? "bg-foreground/7" : ""
-                  }`}
-                >
-                  {label}
-                </SiteLink>
-              ))}
+              {renderNavigation(true)}
               <div className="mt-2 border-t border-border pt-2">
                 <AccountActions
                   {...accountActions}
@@ -370,31 +461,25 @@ export function SiteHeader({ viewer }: { viewer: Viewer | null }) {
             <BrandAvatar />
           </SiteLink>
 
-          <nav
-            aria-label="主要导航"
-            className={`${styles.glass} flex min-h-[52px] items-center gap-0.5 rounded-full p-[5px]`}
-          >
-            {navigation.map(({ label, href, section }) => (
-              <SiteLink
-                key={label}
-                href={href}
-                aria-current={activeSection === section ? "page" : undefined}
-                className={`flex min-h-10 items-center rounded-full px-4 text-[15px] font-medium transition-colors hover:bg-foreground/5.5 hover:text-foreground ${
-                  activeSection === section
-                    ? "bg-foreground/7 text-foreground shadow-sm"
-                    : "text-muted"
-                }`}
+          <MotionConfig reducedMotion="user" transition={{ type: "spring", duration: 0.42, bounce: 0.16 }}>
+            <LayoutGroup id={navigationLayoutId}>
+              <nav
+                aria-label="主要导航"
+                className={`${styles.glass} relative isolate flex min-h-[52px] items-center gap-0.5 rounded-full p-[5px]`}
               >
-                {label}
-              </SiteLink>
-            ))}
-            <SiteLink
-              href="/#recent"
-              className="flex min-h-10 items-center rounded-full px-4 text-[15px] font-medium text-muted transition-colors hover:bg-foreground/5.5 hover:text-foreground"
-            >
-              更多
-            </SiteLink>
-          </nav>
+                {renderNavigation(false)}
+                <motion.div layout="position">
+                  <SiteLink
+                    href="/recent"
+                    className="flex min-h-10 items-center rounded-full px-4 text-[15px] font-medium text-muted transition-colors hover:text-foreground"
+                  >
+                    <NavigationIcon kind="more" selected={false} />
+                    <motion.span layout="position" className="inline-block">更多</motion.span>
+                  </SiteLink>
+                </motion.div>
+              </nav>
+            </LayoutGroup>
+          </MotionConfig>
 
           <div className={`${styles.glass} flex items-center gap-0.5 justify-self-end rounded-full p-[5px]`}>
             <ThemeToggle />

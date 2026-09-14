@@ -168,8 +168,8 @@ export async function savePostGroup(
     return conflictState(result.error, labels);
   }
 
+  expireCacheTag(POST_LIST_CACHE_TAG);
   if (id !== null) {
-    expireCacheTag(POST_LIST_CACHE_TAG);
     invalidateDetails(affectedSlugs);
   }
   refresh();
@@ -264,6 +264,7 @@ export async function deletePostGroup(
     return { message: `${label}暂时无法删除，请稍后重试。`, tone: "error" };
   }
 
+  expireCacheTag(POST_LIST_CACHE_TAG);
   refresh();
   return { message: `${label}已永久删除。`, tone: "success", deletedId: id };
 }
