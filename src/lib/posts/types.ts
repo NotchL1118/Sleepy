@@ -6,6 +6,17 @@ export type PostGroup = {
   slug: string;
 };
 
+export type PostListItem = Pick<Post, "slug" | "title" | "publishedAt">;
+
+export type PostNavigationGroup = PostGroup & {
+  posts: readonly PostListItem[];
+};
+
+export type PostGroupPageData = PostNavigationGroup & {
+  page: number;
+  totalPages: number;
+};
+
 export type Post = {
   id: number;
   kind: PostKind;

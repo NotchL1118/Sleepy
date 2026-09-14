@@ -44,12 +44,17 @@ import {
 } from "../MarkdownEditorField";
 import { TaxonomyDialog } from "../TaxonomyManager";
 import { useUnsavedChanges } from "./useUnsavedChanges";
+import { AiGenerationControl } from "./AiGenerationControl";
+import type { AiGenerationAvailability, AiPostGenerationMode } from "@/lib/ai/types";
+import { applyPostGenerationResult } from "@/lib/ai/generation";
+import { generateAiPostFields } from "@/server/ai/actions";
 
 type PostEditorProps = {
   post: StudioPost | null;
   groups: PostGroupOption[];
   kind: PostKind;
   tags: TagOption[];
+  aiAvailability: AiGenerationAvailability;
 };
 
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error" | "recovered";
@@ -714,7 +719,7 @@ function focusFirstError(errors?: PostActionState["fieldErrors"]) {
   });
 }
 
-export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
+export function PostEditor({ post, groups, kind, tags, aiAvailability }: PostEditorProps) {
   const router = useRouter();
   const options = postKindOptions[kind];
   const status = (post?.status ?? "draft") as StudioPostStatus;
@@ -727,6 +732,8 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
   const bodyMarkdownRef = useRef(post?.body_markdown ?? "");
   const markdownFileInputRef = useRef<HTMLInputElement>(null);
   const markdownImportAttemptRef = useRef(0);
+  const aiAttemptRef = useRef({ latestRequestId: null as string | null, editRevision: 0, mode: "both" as AiPostGenerationMode });
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
 
   const [availableGroups, setAvailableGroups] = useState(groups);
   const [availableTags, setAvailableTags] = useState(tags);
@@ -763,6 +770,58 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
     savedSnapshot,
     true,
   );
+
+  function invalidateAi(field?: "title" | "body" | "summary" | "slug") {
+    const attempt = aiAttemptRef.current;
+    if (!field || field === "title" || field === "body" || attempt.mode === "both" || attempt.mode === field) {
+      attempt.editRevision++;
+    }
+  }
+
+  async function generateFields(mode: AiPostGenerationMode): Promise<string> {
+    const form = formRef.current;
+    if (!form || aiAttemptRef.current.latestRequestId) return "";
+    const data = new FormData(form);
+    const body = bodyMarkdownRef.current;
+    if (!body.trim()) return "请先填写正文。";
+    setMetaOpen(true);
+    const requestId = crypto.randomUUID();
+    const attempt = aiAttemptRef.current;
+    attempt.latestRequestId = requestId;
+    attempt.mode = mode;
+    const input = { requestId, editRevision: attempt.editRevision, mode,
+      postId: currentPostIdRef.current ?? undefined,
+      title: String(data.get("title") ?? ""), bodyMarkdown: body };
+    try {
+      const result = await generateAiPostFields(input);
+      if (!formRef.current || aiAttemptRef.current.latestRequestId !== requestId) return "";
+      if (!result.ok) return result.error.message;
+      const currentData = new FormData(formRef.current);
+      const current = { ...aiAttemptRef.current, postId: currentPostIdRef.current ?? undefined,
+        summary: String(currentData.get("summary") ?? ""), slug: String(currentData.get("slug") ?? "") };
+      const applied = applyPostGenerationResult(current, result);
+      if (applied === current) return "内容已修改，本次结果未填入，请重新生成。";
+      aiAttemptRef.current = { latestRequestId: applied.latestRequestId, editRevision: applied.editRevision, mode };
+      if (mode !== "slug") setSummary(applied.summary);
+      if (mode !== "summary") setSlug(applied.slug);
+      clearFeedback();
+      window.requestAnimationFrame(markMaybeDirty);
+      return "";
+    } catch {
+      return "生成请求未完成，请稍后重试。";
+    } finally {
+      if (aiAttemptRef.current.latestRequestId === requestId) aiAttemptRef.current.latestRequestId = null;
+    }
+  }
+
+  useEffect(() => () => { aiAttemptRef.current.latestRequestId = null; }, []);
+
+  useEffect(() => {
+    const element = summaryRef.current;
+    if (!element || !metaOpen) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 112)}px`;
+  }, [summary, metaOpen]);
 
   useEffect(() => {
     currentPostIdRef.current = currentPostId;
@@ -829,6 +888,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
       try {
         const recovery = JSON.parse(stored) as RecoveryState;
         const frame = window.requestAnimationFrame(() => {
+          aiAttemptRef.current.editRevision++;
           setTitle(recovery.title ?? "");
           setSlug(recovery.slug ?? "");
           setSummary(recovery.summary ?? "");
@@ -978,6 +1038,9 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
     const formData = collectFormData();
     if (!formData) return;
 
+    // A publication may lock the Slug while generation is still in flight.
+    invalidateAi();
+
     savingRef.current = true;
     setSaveOperation("publish");
     setSaveStatus("saving");
@@ -1024,6 +1087,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
   }
 
   function changeBodyMarkdown(value: string) {
+    invalidateAi("body");
     bodyMarkdownRef.current = value;
     setBodyMarkdown(value);
     setMarkdownImportError(null);
@@ -1057,6 +1121,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
       }
 
       const previousBodyMarkdown = bodyMarkdownRef.current;
+      invalidateAi("body");
       bodyMarkdownRef.current = content;
       setBodyMarkdown(content);
       setMarkdownImportError(null);
@@ -1075,6 +1140,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
 
   function undoMarkdownImport() {
     if (!markdownImportUndo) return;
+    invalidateAi("body");
     bodyMarkdownRef.current = markdownImportUndo.bodyMarkdown;
     setBodyMarkdown(markdownImportUndo.bodyMarkdown);
     setMarkdownImportError(null);
@@ -1085,6 +1151,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
   }
 
   function clearRecovery() {
+    invalidateAi();
     setTitle("");
     setSlug("");
     setSummary("");
@@ -1287,7 +1354,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
             id="title"
             name="title"
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => { invalidateAi("title"); setTitle(event.target.value); }}
             placeholder="写下标题"
             aria-invalid={Boolean(feedback.fieldErrors?.title)}
             aria-describedby={feedback.fieldErrors?.title ? "title-error" : undefined}
@@ -1296,18 +1363,21 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
           <FieldError field="title" state={feedback} />
 
           <div className="mt-1.5 shrink-0 border-b border-border">
+            <div className="flex flex-wrap items-start justify-between gap-x-4">
             <button
               type="button"
               onClick={() => setMetaOpen((current) => !current)}
               aria-expanded={metaOpen}
               aria-controls="post-meta-panel"
-              className="flex min-h-9 w-full items-center gap-2 text-left text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+              className="flex min-h-11 min-w-0 flex-1 basis-40 items-center gap-2 text-left text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
             >
               <span className="min-w-0 flex-1 truncate">{metaSummary}</span>
               <ChevronIcon
                 className={`size-3.5 shrink-0 transition-transform ${metaOpen ? "rotate-180" : ""}`}
               />
             </button>
+            <AiGenerationControl initialAvailability={aiAvailability} slugLocked={Boolean(post?.published_at)} onGenerate={generateFields} />
+            </div>
             <div
               id="post-meta-panel"
               className={metaOpen ? "border-t border-border" : "hidden"}
@@ -1351,7 +1421,7 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
                     name="slug"
                     value={slug}
                     readOnly={Boolean(post?.published_at)}
-                    onChange={(event) => setSlug(event.target.value)}
+                    onChange={(event) => { invalidateAi("slug"); setSlug(event.target.value); }}
                     placeholder="lowercase-kebab-case"
                     autoCapitalize="none"
                     spellCheck={false}
@@ -1366,15 +1436,11 @@ export function PostEditor({ post, groups, kind, tags }: PostEditorProps) {
               <label className="block border-t border-border py-1">
                 <span className="block text-[11px] font-medium text-muted">摘要</span>
                 <textarea
+                  ref={summaryRef}
                   name="summary"
                   value={summary}
                   rows={1}
-                  onChange={(event) => setSummary(event.target.value)}
-                  onInput={(event) => {
-                    const element = event.currentTarget;
-                    element.style.height = "auto";
-                    element.style.height = `${Math.min(element.scrollHeight, 112)}px`;
-                  }}
+                  onChange={(event) => { invalidateAi("summary"); setSummary(event.target.value); }}
                   placeholder="摘要（可选）"
                   className="min-h-8 max-h-28 w-full resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-muted/55"
                 />

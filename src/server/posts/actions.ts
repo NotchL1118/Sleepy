@@ -12,6 +12,15 @@ import {
 import { postKindOptions } from "@/lib/posts/post-kinds";
 import { isValidSlug } from "@/lib/posts/slug";
 import type { PostKind } from "@/lib/posts/types";
+import { listPostNavigation } from "./public-navigation";
+
+// Public, read-only entry point called on first menu interaction.
+export async function loadPostNavigation(kind: PostKind) {
+  if (kind !== "regular" && kind !== "heartwork") {
+    throw new Error("Invalid Post kind.");
+  }
+  return listPostNavigation(kind);
+}
 
 export type PostField =
   | "bodyMarkdown"

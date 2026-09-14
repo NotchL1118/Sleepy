@@ -179,6 +179,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      ai_delete_model: {
+        Args: { p_expected_revision: number; p_id: string }
+        Returns: undefined
+      }
+      ai_list_configuration: { Args: never; Returns: Json }
+      ai_model_snapshot: { Args: { p_id?: string }; Returns: Json }
+      ai_save_model: {
+        Args: {
+          p_credential: Json
+          p_expected_revision: number
+          p_model: Json
+          p_replace_credential: boolean
+        }
+        Returns: string
+      }
+      ai_update_settings: { Args: { p_patch: Json }; Returns: undefined }
       create_and_publish_post: {
         Args: {
           p_body_markdown: string
