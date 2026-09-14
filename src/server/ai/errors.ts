@@ -13,6 +13,8 @@ const messages: Record<AiErrorCode, string> = {
   invalid_response: '模型未返回完整有效的文本。',
   cancelled: '模型调用已取消。',
   timeout: '模型调用超时，请手动重试。',
+  invalid_input: '请提供有效的请求标识、编辑版本及完整 Markdown 正文。',
+  input_too_large: '完整文章与指令超出当前模型容量；长文摘要暂未支持，请调整模型配置后手动重试。',
 };
 export class AiError extends Error {
   readonly code: AiErrorCode;

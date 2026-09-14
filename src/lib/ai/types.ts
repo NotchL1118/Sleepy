@@ -27,7 +27,7 @@ export type AiConfiguration = {
 };
 export type AiErrorCode = 'forbidden' | 'invalid_configuration' | 'configuration_missing' |
   'conflict' | 'storage_failed' | 'credential_unavailable' | 'disabled' | 'target_blocked' |
-  'provider_failed' | 'invalid_response' | 'cancelled' | 'timeout';
+  'provider_failed' | 'invalid_response' | 'cancelled' | 'timeout' | 'invalid_input' | 'input_too_large';
 export type AiResult<T> = { ok: true; value: T } | { ok: false; error: { code: AiErrorCode; message: string } };
 export type AiUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type AiDiagnostic = {
@@ -40,3 +40,16 @@ export type AiDiagnostic = {
 };
 export type AiTextRequest = { system: string; text: string; maxOutputTokens: number; signal?: AbortSignal; timeoutMs?: number };
 export type AiTextResult = AiResult<{ text: string; usage: AiUsage }> & { diagnostic: AiDiagnostic };
+
+export type AiSummaryInput = {
+  /** Unique per attempt, including manual retries. */
+  requestId: string;
+  /** Increment on every title, body or summary edit, including undo/redo. */
+  editRevision: number;
+  title: string;
+  bodyMarkdown: string;
+  /** Correlation only; generation never reads or writes the saved Post. */
+  postId?: number;
+};
+export type AiSummaryCandidate = Pick<AiSummaryInput, 'requestId' | 'editRevision' | 'postId'> & { summary: string };
+export type AiSummaryResult = AiResult<AiSummaryCandidate>;

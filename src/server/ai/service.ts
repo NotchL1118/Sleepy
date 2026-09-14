@@ -1,10 +1,11 @@
 import 'server-only';
-import type { AiConfiguration, AiModelInput, AiPrompts, AiTextRequest, AiDiagnostic, AiTextResult } from '@/lib/ai/types';
+import type { AiConfiguration, AiModelInput, AiPrompts, AiTextRequest, AiDiagnostic, AiTextResult, AiSummaryInput } from '@/lib/ai/types';
 import { modelRecord, publicModel, validateId, validatePrompts, type ModelRecord, type SettingsRecord } from './configuration';
 import { decryptCredential, encryptCredential, environmentKeyring, type Keyring } from './credentials';
 import { AiError, result } from './errors';
 import { callModel } from './model';
 import type { NetworkBoundary } from './transport';
+import { generateSummary } from './summary';
 export type AiRpc = 'is_admin' | 'ai_list_configuration' | 'ai_save_model' | 'ai_update_settings' | 'ai_model_snapshot';
 export type AiDependencies = {
   rpc: (name: AiRpc, args?: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }>;
@@ -56,6 +57,7 @@ export function createAiService(dependencies: AiDependencies) {
     return records;
   }
   return {
+    generateSummary: (input: AiSummaryInput, signal?: AbortSignal) => generateSummary(input, () => snapshot(), signal),
     credentialVersions: () => result(async () => {
       await authorize();
       const versions: Record<string, number> = Object.create(null);

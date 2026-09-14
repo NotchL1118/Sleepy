@@ -7,6 +7,7 @@ import type { AiProtocol, AiDiagnostic, AiTextRequest, AiTextResult, AiUsage } f
 import type { ModelRecord } from './configuration';
 import { AiError, failure } from './errors';
 import { protectedTransport, type NetworkBoundary } from './transport';
+import { validateProtocolResponse } from './protocol-response';
 
 // Each protocol's permitted resource and matching pi-ai adapter change together.
 const protocols: Record<AiProtocol, { resource: string; stream: StreamFunction<AiProtocol> }> = {
@@ -24,6 +25,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
   const timer = setTimeout(() => { timedOut = true; timerController.abort(); }, timeoutMs);
   const protocol = protocols[record.protocol];
   let transport: ReturnType<typeof protectedTransport> | undefined;
+  let invalidEnvelope = false;
   let removeAbortListener = () => {};
   const diagnostic = (status: AiDiagnostic['status'], usage?: AiUsage): AiDiagnostic => ({
     modelId: record.id, protocol: record.protocol, status, durationMs: Date.now() - started,
@@ -41,7 +43,13 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } satisfies Model<typeof record.protocol>;
     const context: Context = { systemPrompt: request.system, messages: [{ role: 'user', content: request.text, timestamp: started }] };
-    const options: StreamOptions = { apiKey, fetch: transport.fetch, signal, maxRetries: 0, timeoutMs,
+    const protectedFetch = transport.fetch;
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const response = await protectedFetch(input, init);
+      try { return await validateProtocolResponse(response, record.protocol); }
+      catch (error) { invalidEnvelope = error instanceof AiError; throw error; }
+    };
+    const options: StreamOptions = { apiKey, fetch, signal, maxRetries: 0, timeoutMs,
       maxTokens: request.maxOutputTokens, cacheRetention: 'none',
       // DeepSeek's current default is thinking mode; connection tests and this text contract use non-thinking.
       ...(record.protocol === 'openai-completions' && new URL(record.endpoint).hostname === 'api.deepseek.com' ? { onPayload: payload => ({ ...(payload as object), thinking: { type: 'disabled' } }) } : {}),
@@ -55,6 +63,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     const output = await Promise.race([stream.result(), cancelled]);
     if (signal.aborted) throw new AiError(timedOut ? 'timeout' : 'cancelled');
     if (transport.blocked) throw new AiError('target_blocked');
+    if (invalidEnvelope) throw new AiError('invalid_response');
     if (output.stopReason === 'error' || output.stopReason === 'aborted') throw new AiError('provider_failed');
     if (output.stopReason !== 'stop' || output.content.some(part => part.type !== 'text' && part.type !== 'thinking')) throw new AiError('invalid_response');
     const text = output.content.filter(part => part.type === 'text').map(part => part.text).join('').trim();
@@ -62,6 +71,8 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     const usage: AiUsage = { inputTokens: output.usage.input, outputTokens: output.usage.output,
       cacheReadTokens: output.usage.cacheRead, cacheWriteTokens: output.usage.cacheWrite };
     if (Object.values(usage).some(value => !Number.isFinite(value) || value < 0)) throw new AiError('invalid_response');
+    // Cleanup belongs to the same call budget, including on successful output.
+    await Promise.race([transport.close(), cancelled]);
     return { ok: true, value: { text, usage }, diagnostic: diagnostic('success', usage) };
   } catch (error) {
     const safe = signal.aborted ? new AiError(timedOut ? 'timeout' : 'cancelled') :
@@ -71,6 +82,7 @@ export async function callModel(record: ModelRecord, apiKey: string, request: Ai
     clearTimeout(timer);
     removeAbortListener();
     timerController.abort();
-    await transport?.close().catch(() => undefined);
+    // Destroy on failures too, without allowing a stalled socket cleanup to extend the deadline.
+    void transport?.close().catch(() => undefined);
   }
 }

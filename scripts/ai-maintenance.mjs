@@ -12,8 +12,8 @@ const { createAiService } = await import('../src/server/ai/service.ts');
 const command = process.argv[2];
 const adminId = process.env.AI_MAINTENANCE_ADMIN_ID;
 const databaseUrl = process.env.AI_MAINTENANCE_DATABASE_URL;
-if (!['versions', 'rotate', 'test'].includes(command) || !adminId || !databaseUrl || (command === 'test' && !process.argv[3])) {
-  console.error('Usage: node --env-file=<server-env-file> scripts/ai-maintenance.mjs versions|rotate|test [model-id]. Set AI_MAINTENANCE_DATABASE_URL and AI_MAINTENANCE_ADMIN_ID.');
+if (!['versions', 'rotate', 'test', 'summary'].includes(command) || !adminId || !databaseUrl || (command === 'test' && !process.argv[3])) {
+  console.error('Usage: node --env-file=<server-env-file> scripts/ai-maintenance.mjs versions|rotate|test [model-id]|summary. Set AI_MAINTENANCE_DATABASE_URL and AI_MAINTENANCE_ADMIN_ID.');
   process.exit(1);
 }
 const db = postgres(databaseUrl, { max: 1, onnotice: () => {} });
@@ -29,7 +29,11 @@ try {
       } catch (error) { return { data: null, error: { code: error.code } }; }
     } });
     const result = command === 'versions' ? await service.credentialVersions() :
-      command === 'rotate' ? await service.rotateCredentials() : await service.testConnection(process.argv[3]);
+      command === 'rotate' ? await service.rotateCredentials() :
+      command === 'summary' ? await service.generateSummary({
+        requestId: crypto.randomUUID(), editRevision: 0, title: '摘要接入验证',
+        bodyMarkdown: '这是一次使用专用测试凭据的摘要接入验证。生成操作只返回候选，不保存文章，也不改变公开内容。',
+      }) : await service.testConnection(process.argv[3]);
     if (!result.ok) throw new Error(result.error.code);
     return result;
   });

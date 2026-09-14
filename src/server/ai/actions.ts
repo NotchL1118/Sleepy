@@ -1,6 +1,12 @@
 'use server';
-import type { AiModelInput, AiPrompts } from '@/lib/ai/types';
+import type { AiModelInput, AiPrompts, AiSummaryInput } from '@/lib/ai/types';
 import { aiService } from './queries';
+import { failure } from './errors';
+
+export async function generateAiSummary(input: AiSummaryInput) {
+  try { return await (await aiService()).generateSummary(input); }
+  catch (error) { return failure(error); }
+}
 
 export async function saveAiModel(input: AiModelInput) {
   return (await aiService()).saveModel(input);
